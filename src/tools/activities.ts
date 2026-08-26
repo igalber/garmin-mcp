@@ -1,9 +1,13 @@
 import { z } from "zod";
+import { Buffer } from "node:buffer";
 import { dateStr, idParam, stripNulls } from "../toolkit";
 import type { Ctx, ToolDef } from "../toolkit";
 
 const ACTIVITY = "/activity-service/activity";
 const ACTIVITIES = "/activitylist-service/activities/search/activities";
+const UPLOAD = "/upload-service/upload";
+// TCX Sport is limited to these three; finer typing must be set after upload
+const TCX_SPORT: Record<string, string> = { running: "Running", cycling: "Biking", other: "Other" };
 
 function actId(id: string | number): number {
   const n = Number(id);
@@ -17,6 +21,54 @@ function putActivity(ctx: Ctx, activityId: number, payload: Record<string, any>)
     method: "PUT",
     body: { activityId, ...payload },
   });
+}
+
+// POST a file to the upload service; Garmin creates the activity from it
+async function uploadActivityFile(
+  ctx: Ctx,
+  filename: string,
+  content: Uint8Array | string,
+  type: string
+) {
+  const res = (await ctx.api(UPLOAD, { method: "POST", form: { file: { filename, content, type } } })) as any;
+  const r = res?.detailedImportResult ?? {};
+  const success = r.successes?.[0];
+  const failure = r.failures?.[0];
+  return stripNulls({
+    upload_id: r.uploadId ?? null,
+    // internalId is the created activityId; may be null if Garmin processes asynchronously
+    activity_id: success?.internalId ?? null,
+    status: success ? "uploaded" : failure ? "failed" : "processing",
+    messages: (success?.messages ?? failure?.messages ?? []).map((m: any) => m.content ?? m),
+  });
+}
+
+// Minimal HR-only TCX (optional distance); trackpoints carry Time + HeartRateBpm
+function buildHrTcx(
+  startIso: string,
+  sport: string,
+  samples: { seconds: number; bpm: number }[],
+  distanceMeters: number
+): string {
+  const start = new Date(startIso);
+  if (isNaN(start.getTime())) throw new Error(`invalid start_time: ${startIso}`);
+  const sorted = [...samples].sort((a, b) => a.seconds - b.seconds);
+  const total = sorted[sorted.length - 1].seconds;
+  const iso = (offset: number) => new Date(start.getTime() + offset * 1000).toISOString();
+  const track = sorted
+    .map(
+      (s) =>
+        `<Trackpoint><Time>${iso(s.seconds)}</Time><HeartRateBpm><Value>${Math.round(
+          s.bpm
+        )}</Value></HeartRateBpm></Trackpoint>`
+    )
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+<Activities><Activity Sport="${sport}"><Id>${iso(0)}</Id>
+<Lap StartTime="${iso(0)}"><TotalTimeSeconds>${total}</TotalTimeSeconds><DistanceMeters>${distanceMeters}</DistanceMeters><Calories>0</Calories><Intensity>Active</Intensity><TriggerMethod>Manual</TriggerMethod>
+<Track>${track}</Track></Lap></Activity></Activities>
+</TrainingCenterDatabase>`;
 }
 
 // Never read-modify-write full summaryDTO: PUTting the GPS coordinate pair back 400s
@@ -692,5 +744,60 @@ Returns a list of all activity types supported by Garmin Connect, useful for fil
         ),
       };
     },
+  },
+  {
+    name: "upload_activity",
+    desc: `Upload an activity file to Garmin Connect (FIT, TCX, or GPX). Garmin ingests the file and creates the activity with its full data — heart rate, GPS, cadence, etc. This is the only way to add time-series data (unlike create_manual_activity, which stores summary numbers only).
+
+For TCX/GPX pass the XML as text in \`content\`; for FIT pass base64 in \`content_base64\`.`,
+    params: {
+      filename: z.string().describe('File name with extension, e.g. "run.tcx", "ride.gpx", "activity.fit"'),
+      content: z.string().optional().describe("File content as text (TCX or GPX XML)"),
+      content_base64: z.string().optional().describe("File content as base64 (FIT binary)"),
+    },
+    run: async (args, ctx) => {
+      const ext = args.filename.split(".").pop()?.toLowerCase();
+      if (!ext || !["fit", "tcx", "gpx"].includes(ext))
+        return "Error: filename must end in .fit, .tcx, or .gpx";
+      if (ext === "fit") {
+        if (!args.content_base64) return "Error: FIT upload requires content_base64";
+        const bytes = Uint8Array.from(Buffer.from(args.content_base64, "base64"));
+        return uploadActivityFile(ctx, args.filename, bytes, "application/octet-stream");
+      }
+      if (!args.content) return "Error: TCX/GPX upload requires content (XML text)";
+      const type = ext === "tcx" ? "application/vnd.garmin.tcx+xml" : "application/gpx+xml";
+      return uploadActivityFile(ctx, args.filename, args.content, type);
+    },
+  },
+  {
+    name: "create_activity_with_hr",
+    desc: `Create an activity from heart-rate samples — e.g. backfilling an old workout done without a watch, with real HR data. Builds a TCX with the HR track and uploads it, so Garmin shows an actual HR graph and zones (not just an average).
+
+TCX supports only Running / Biking / Other sport granularity; rename or re-type afterward with set_activity_name / set_activity_type.`,
+    params: {
+      start_time: z.string().describe("Activity start as ISO 8601, e.g. 2026-08-01T09:00:00Z"),
+      sport: z.enum(["running", "cycling", "other"]).default("other"),
+      samples: z
+        .array(
+          z.object({
+            seconds: z.number().min(0).describe("Offset from start_time, in seconds"),
+            bpm: z.number().int().min(20).max(255),
+          })
+        )
+        .min(1)
+        .describe("Heart-rate samples across the activity"),
+      distance_meters: z.number().min(0).default(0).describe("Optional total distance in meters"),
+    },
+    run: async (args, ctx) => {
+      const tcx = buildHrTcx(args.start_time, TCX_SPORT[args.sport], args.samples, args.distance_meters);
+      const filename = `hr-activity-${args.start_time.replace(/[:.]/g, "-")}.tcx`;
+      return uploadActivityFile(ctx, filename, tcx, "application/vnd.garmin.tcx+xml");
+    },
+  },
+  {
+    name: "delete_activity",
+    desc: "Permanently delete an activity from Garmin Connect by id. Cannot be undone.",
+    params: { activity_id: idParam },
+    run: (args, ctx) => ctx.api(`${ACTIVITY}/${actId(args.activity_id)}`, { method: "DELETE" }),
   },
 ];
