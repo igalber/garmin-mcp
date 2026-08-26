@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Garmin MCP — Auth & Tool-Call Flow",
+    "output": "mcp-flow.html",
+    "viewBox": [1060, 820],
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "views": [
+      { "id": "authorize", "label": "One-time authorize", "focus": ["client", "worker", "kv", "garmin"], "note": "Login runs Garmin's SSO server-side; only the resulting token is kept, encrypted." },
+      { "id": "tool-call", "label": "Every tool call", "focus": ["client", "worker", "kv", "mcp", "garmin"], "note": "Each request is gated on a provider-validated access token before any Garmin call." }
+    ]
+  },
+  "participants": [
+    { "id": "client", "type": "external", "label": "MCP Client", "sublabel": "ChatGPT / Claude" },
+    { "id": "worker", "type": "security", "label": "Worker", "sublabel": "OAuth 2.1 provider" },
+    { "id": "kv", "type": "database", "label": "Workers KV", "sublabel": "encrypted grants" },
+    { "id": "mcp", "type": "backend", "label": "GarminMCP", "sublabel": "Durable Object" },
+    { "id": "garmin", "type": "external", "label": "Garmin Connect", "sublabel": "sso + connectapi" }
+  ],
+  "segments": [
+    { "from": 172, "to": 388, "label": "One-time authorize" },
+    { "from": 420, "to": 720, "label": "Every tool call" }
+  ],
+  "messages": [
+    { "id": "authorize", "from": "client", "to": "worker", "y": 190, "label": "POST /authorize (email + password + MFA)", "variant": "security" },
+    { "id": "sso-login", "from": "worker", "to": "garmin", "y": 234, "label": "SSO web-widget login", "variant": "security" },
+    { "id": "sso-ticket", "from": "garmin", "to": "worker", "y": 278, "label": "ticket -> OAuth1 token", "variant": "return" },
+    { "id": "store-grant", "from": "worker", "to": "kv", "y": 322, "label": "store grant (encrypted)", "variant": "dashed", "note": "owner allowlist checked; credentials discarded" },
+    { "id": "redirect-token", "from": "worker", "to": "client", "y": 366, "label": "302 -> access token", "variant": "return" },
+
+    { "id": "mcp-request", "from": "client", "to": "worker", "y": 440, "label": "POST /mcp + Bearer token", "variant": "emphasis" },
+    { "id": "validate-token", "from": "worker", "to": "kv", "y": 484, "label": "validate token -> decrypt grant", "variant": "security" },
+    { "id": "invoke-tool", "from": "worker", "to": "mcp", "y": 528, "label": "invoke tool (session DO)", "variant": "default" },
+    { "id": "garmin-call", "from": "mcp", "to": "garmin", "y": 572, "label": "exchange OAuth1 -> OAuth2, GET connectapi", "variant": "emphasis", "note": "OAuth2 bearer cached ~1h" },
+    { "id": "garmin-data", "from": "garmin", "to": "mcp", "y": 616, "label": "Garmin data", "variant": "return" },
+    { "id": "tool-result", "from": "mcp", "to": "worker", "y": 660, "label": "tool result", "variant": "return" },
+    { "id": "rpc-result", "from": "worker", "to": "client", "y": 704, "label": "JSON-RPC result", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "worker", "from": 185, "to": 372, "type": "security" },
+    { "participant": "garmin", "from": 229, "to": 282, "type": "external" },
+    { "participant": "kv", "from": 317, "to": 328, "type": "database" },
+    { "participant": "worker", "from": 435, "to": 708, "type": "security" },
+    { "participant": "kv", "from": 479, "to": 490, "type": "database" },
+    { "participant": "mcp", "from": 523, "to": 664, "type": "backend" },
+    { "participant": "garmin", "from": 567, "to": 620, "type": "external" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One-time authorize",
+      "items": [
+        "SSO web-widget login runs server-side with MFA; password discarded after use",
+        "Grant props are AES-GCM encrypted in KV; owner allowlist gates who may connect"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Every tool call",
+      "items": [
+        "No raw-header path: each request needs a provider-validated access token",
+        "OAuth1 is exchanged for a short-lived OAuth2 bearer, cached per session"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Isolation",
+      "items": [
+        "Anonymous requests get 401 before any Garmin call is made",
+        "Token cache is principal-bound, so a reused DO never crosses accounts"
+      ]
+    }
+  ]
+}
