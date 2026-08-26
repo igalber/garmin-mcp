@@ -93,7 +93,7 @@
     <p class="sub">One remote endpoint your AI client talks to; it relays to Garmin on your behalf.</p>
     <p>Garmin offers no public API for personal data, so this server speaks Garmin Connect's internal API — the same one the mobile app uses — through a hardened, single-purpose Cloudflare Worker. You authenticate once in the browser; the server exchanges your long-lived Garmin token for short-lived bearers on each call and returns clean JSON to the model.</p>
     <ul class="clean">
-      <li><strong>Stateless per request</strong> — nothing about your data is stored; the Worker holds only your encrypted Garmin grant.</li>
+      <li><strong>Your Garmin data is never stored</strong> — only your Garmin auth token is persisted, so the server can call the API on your behalf between sessions.</li>
       <li><strong>OAuth-only access</strong> — every request is gated on a provider-issued access token; there is no raw-header shortcut.</li>
       <li><strong>Locked to your account</strong> — an owner allowlist rejects logins from any Garmin account but yours.</li>
     </ul>
@@ -171,7 +171,7 @@ npx wrangler secret put OWNER_GARMIN_IDS</code></pre>
     <ul class="clean">
       <li><strong>No anonymous access.</strong> Requests without a valid access token get <code>401</code> before any Garmin call.</li>
       <li><strong>Server-side login.</strong> The browser flow runs Garmin's SSO web-widget login on the Worker; your password never persists.</li>
-      <li><strong>Encrypted at rest.</strong> Access/refresh tokens are stored hashed; your Garmin token is AES-GCM encrypted inside the OAuth grant.</li>
+      <li><strong>Where the token lives.</strong> Your Garmin token is persisted in two places: the OAuth grant in Workers KV, AES-GCM encrypted by the OAuth provider; and each live session's Durable Object storage, encrypted at rest by Cloudflare. Access/refresh tokens themselves are stored only as hashes.</li>
       <li><strong>Owner allowlist.</strong> Only a login to an allowlisted Garmin account mints a usable token — strangers can't use your deployment even with their own Garmin credentials.</li>
       <li><strong>Principal-bound cache.</strong> A reused Durable Object never serves one account's cached token under another's credential.</li>
     </ul>
