@@ -2,10 +2,10 @@
 
 Remote MCP server for Garmin Connect on Cloudflare Workers (free tier). Full TypeScript port of
 [taxuspt/garmin_mcp](https://github.com/taxuspt/garmin_mcp): all 138 tools plus a `garmin_get`
-passthrough and three added tools (`upload_activity`, `create_activity_with_hr`, `delete_activity`)
-— 142 total — and the 5 workout template/reference MCP resources.
+passthrough and four added tools (`upload_activity`, `create_activity_with_hr`, `delete_activity`,
+`get_sleep_range`) — 143 total — and the 5 workout template/reference MCP resources.
 
-Modules: activity management (24), health & wellness (29), training & performance (15),
+Modules: activity management (24), health & wellness (30), training & performance (15),
 workouts + builders (19), nutrition (14), challenges/devices/gear (18), weight/body/women's
 health/courses (14), FIT-file analysis (4), user profile (4), passthrough (1).
 

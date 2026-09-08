@@ -394,6 +394,56 @@ export const tools: ToolDef[] = [
     },
   },
   {
+    name: "get_sleep_range",
+    desc: `Get per-night sleep summaries for a date range in ONE call — sleep score, stages (deep/light/REM/awake), duration, resting HR, overnight HRV, respiration, body-battery change. Use this for bulk or trend queries (e.g. the last 30 days) instead of calling get_sleep_data once per day, which returns ~50KB of minute-level detail per night. For a single night's full hypnogram, use get_sleep_data.`,
+    params: {
+      start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
+      end_date: dateStr.describe("End date in YYYY-MM-DD format"),
+    },
+    run: async (args, ctx) => {
+      // Garmin caps this endpoint at 28 days/request; 1120 days = 40 chunks (the worker call budget)
+      assertSpan(args.start_date, args.end_date, 1120);
+      const end = parseDate(args.end_date);
+      const byDate = new Map<string, any>();
+      for (let cur = parseDate(args.start_date); cur <= end; ) {
+        const chunkEnd = addDays(cur, 27) < end ? addDays(cur, 27) : end;
+        const res = (await ctx.api(
+          `/sleep-service/stats/sleep/daily/${isoDate(cur)}/${isoDate(chunkEnd)}`
+        )) as any;
+        for (const d of res?.individualStats ?? []) {
+          if (d?.calendarDate) byDate.set(d.calendarDate, d);
+        }
+        cur = addDays(chunkEnd, 1);
+      }
+      const nights = [...byDate.values()].sort((a, b) =>
+        a.calendarDate.localeCompare(b.calendarDate)
+      );
+      if (nights.length === 0)
+        return `No sleep data found between ${args.start_date} and ${args.end_date}`;
+      // Curate to trend-relevant fields; drop the minute-level arrays get_sleep_data carries
+      const days = nights.map((n) => {
+        const v = n.values ?? {};
+        return stripNulls({
+          date: n.calendarDate,
+          sleep_score: v.sleepScore,
+          quality: v.sleepScoreQuality,
+          total_sleep_seconds: v.totalSleepTimeInSeconds,
+          deep_seconds: v.deepTime,
+          light_seconds: v.lightTime,
+          rem_seconds: v.remTime,
+          awake_seconds: v.awakeTime,
+          resting_heart_rate: v.restingHeartRate,
+          avg_overnight_hrv: v.avgOvernightHrv,
+          hrv_status: v.hrvStatus,
+          respiration: v.respiration,
+          body_battery_change: v.bodyBatteryChange,
+          sleep_need_minutes: v.sleepNeed,
+        });
+      });
+      return { start_date: args.start_date, end_date: args.end_date, nights: days.length, days };
+    },
+  },
+  {
     name: "get_stress_data",
     desc: "Get full stress time-series data. Note: This returns detailed interval data (~35KB) including body battery. For a compact summary, use get_stress_summary().",
     params: { date: dateStr },
