@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Ctx, ToolDef } from "../toolkit";
-import { dateStr, stripNulls } from "../toolkit";
+import { dateStr, stripNulls, withMessage } from "../toolkit";
 
 // Garmin's API expects integer strings like "160" not "160.0"
 function numToStr(value: number | string): string {
@@ -161,6 +161,14 @@ export const tools: ToolDef[] = [
       fat_grams: z.number().int().optional().describe("Daily fat target in grams"),
       protein_grams: z.number().int().optional().describe("Daily protein target in grams"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      date: z.string().optional(),
+      calorie_goal: z.unknown().optional(),
+      carbs_grams: z.unknown().optional(),
+      fat_grams: z.unknown().optional(),
+      protein_grams: z.unknown().optional(),
+    }),
     run: async (args, ctx) => {
       const { date, calorie_goal, carbs_grams, fat_grams, protein_grams } = args;
       if ([calorie_goal, carbs_grams, fat_grams, protein_grams].every((v) => v === undefined)) {
@@ -198,6 +206,38 @@ export const tools: ToolDef[] = [
       start: z.number().int().default(0).describe("Starting index for pagination (default 0)"),
       limit: z.number().int().default(20).describe("Maximum number of results per page (default 20)"),
     },
+    outputSchema: withMessage({
+      count: z.number().optional(),
+      has_more: z.boolean().optional(),
+      results: z
+        .array(
+          z.object({
+            food_id: z.unknown().optional(),
+            name: z.unknown().optional(),
+            food_type: z.unknown().optional(),
+            source: z.unknown().optional(),
+            region: z.unknown().optional(),
+            language: z.unknown().optional(),
+            brand: z.unknown().optional(),
+            servings: z
+              .array(
+                z.object({
+                  serving_id: z.unknown().optional(),
+                  serving_unit: z.unknown().optional(),
+                  number_of_units: z.unknown().optional(),
+                  calories: z.unknown().optional(),
+                  carbs_g: z.unknown().optional(),
+                  protein_g: z.unknown().optional(),
+                  fat_g: z.unknown().optional(),
+                  fiber_g: z.unknown().optional(),
+                  sodium_mg: z.unknown().optional(),
+                })
+              )
+              .optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const data = (await ctx.api("/nutrition-service/food/search", {
         params: { searchExpression: args.query, start: String(args.start), limit: String(args.limit) },
@@ -338,6 +378,10 @@ export const tools: ToolDef[] = [
         .string()
         .describe("ID of the custom food to delete — a 32-char hex string (from get_custom_foods or create_custom_food)"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      food_id: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       await ctx.api(`/nutrition-service/customFood/${args.food_id}`, { method: "DELETE" });
       return {
@@ -421,6 +465,10 @@ export const tools: ToolDef[] = [
         .describe("Log entry ID to delete — a 32-char hex UUID (from get_nutrition_daily_food_log)"),
       meal_date: dateStr.describe("Date of the log entry in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      log_id: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       await ctx.api(`/nutrition-service/food/logs/${args.meal_date}`, {
         method: "DELETE",

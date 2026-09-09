@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Buffer } from "node:buffer";
-import { dateStr, idParam, stripNulls } from "../toolkit";
+import { dateStr, idParam, stripNulls, withMessage } from "../toolkit";
 import type { Ctx, ToolDef } from "../toolkit";
 
 const ACTIVITY = "/activity-service/activity";
@@ -103,6 +103,29 @@ function curateListActivity(a: Record<string, any>): Record<string, any> {
   });
 }
 
+const listActivityShape = {
+  id: z.number().optional(),
+  name: z.string().optional(),
+  type: z.string().optional(),
+  event_type: z.string().optional(),
+  start_time: z.string().optional(),
+  distance_meters: z.number().optional(),
+  duration_seconds: z.number().optional(),
+  calories: z.number().optional(),
+  avg_hr_bpm: z.number().optional(),
+  max_hr_bpm: z.number().optional(),
+  steps: z.number().optional(),
+  elevation_gain_meters: z.number().optional(),
+  elevation_loss_meters: z.number().optional(),
+};
+
+const uploadResultSchema = withMessage({
+  upload_id: z.unknown().optional(),
+  activity_id: z.unknown().optional(),
+  status: z.string().optional(),
+  messages: z.array(z.unknown()).optional(),
+});
+
 export const tools: ToolDef[] = [
   {
     name: "get_activities_by_date",
@@ -133,6 +156,15 @@ Each activity includes an event_type field with values such as:
         .default(100)
         .describe("Number of activities per page, max 200 (default 100)"),
     },
+    outputSchema: withMessage({
+      count: z.number().optional(),
+      page: z.number().optional(),
+      page_size: z.number().optional(),
+      has_more: z.boolean().optional(),
+      next_page: z.number().optional(),
+      date_range: z.object({ start: z.string().optional(), end: z.string().optional() }).optional(),
+      activities: z.array(z.object(listActivityShape)).optional(),
+    }),
     run: async (args, ctx) => {
       const pageSize = Math.min(Math.max(1, args.page_size), 200);
       const start = args.page * pageSize;
@@ -162,6 +194,29 @@ Each activity includes an event_type field with values such as:
     name: "get_activities_fordate",
     desc: "Get activities for a specific date",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      count: z.number().optional(),
+      activities: z
+        .array(
+          z.object({
+            id: z.number().optional(),
+            name: z.string().optional(),
+            type: z.string().optional(),
+            event_type: z.string().optional(),
+            start_time: z.string().optional(),
+            distance_meters: z.number().optional(),
+            duration_seconds: z.number().optional(),
+            calories: z.number().optional(),
+            avg_hr_bpm: z.number().optional(),
+            steps: z.number().optional(),
+            lap_count: z.number().optional(),
+            moderate_intensity_minutes: z.number().optional(),
+            vigorous_intensity_minutes: z.number().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const data = (await ctx.api(`/mobile-gateway/heartRate/forDate/${args.date}`)) as Record<
         string,
@@ -198,6 +253,53 @@ Each activity includes an event_type field with values such as:
 
 Returns a comprehensive summary including timing, distance, heart rate, elevation, training effect, and an event_type field. Common event_type values: "race", "training", "uncategorized" (no event type set by the user). The field is omitted for very old activities that pre-date event type support in the Garmin API.`,
     params: { activity_id: idParam.describe("ID of the activity to retrieve") },
+    outputSchema: withMessage({
+      id: z.number().optional(),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      type: z.string().optional(),
+      event_type: z.string().optional(),
+      parent_type: z.number().optional(),
+      start_time_local: z.string().optional(),
+      start_time_gmt: z.string().optional(),
+      duration_seconds: z.number().optional(),
+      moving_duration_seconds: z.number().optional(),
+      elapsed_duration_seconds: z.number().optional(),
+      distance_meters: z.number().optional(),
+      avg_speed_mps: z.number().optional(),
+      max_speed_mps: z.number().optional(),
+      avg_hr_bpm: z.number().optional(),
+      max_hr_bpm: z.number().optional(),
+      min_hr_bpm: z.number().optional(),
+      calories: z.number().optional(),
+      bmr_calories: z.number().optional(),
+      avg_cadence: z.number().optional(),
+      max_cadence: z.number().optional(),
+      avg_stride_length_cm: z.number().optional(),
+      avg_ground_contact_time_ms: z.number().optional(),
+      avg_vertical_oscillation_cm: z.number().optional(),
+      steps: z.number().optional(),
+      avg_power_watts: z.number().optional(),
+      max_power_watts: z.number().optional(),
+      normalized_power_watts: z.number().optional(),
+      training_effect: z.number().optional(),
+      anaerobic_training_effect: z.number().optional(),
+      training_effect_label: z.string().optional(),
+      training_load: z.number().optional(),
+      moderate_intensity_minutes: z.number().optional(),
+      vigorous_intensity_minutes: z.number().optional(),
+      elevation_gain_meters: z.number().optional(),
+      elevation_loss_meters: z.number().optional(),
+      max_elevation_meters: z.number().optional(),
+      min_elevation_meters: z.number().optional(),
+      recovery_hr_bpm: z.number().optional(),
+      body_battery_impact: z.number().optional(),
+      workout_feel: z.number().optional(),
+      workout_rpe: z.number().optional(),
+      lap_count: z.number().optional(),
+      has_splits: z.boolean().optional(),
+      device_manufacturer: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       const activity = (await ctx.api(`${ACTIVITY}/${id}`)) as Record<string, any> | null;
@@ -261,6 +363,11 @@ Returns a comprehensive summary including timing, distance, heart rate, elevatio
       activity_id: idParam.describe("ID of the activity to update"),
       activity_name: z.string().describe("New activity name"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      activity_name: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       const name = args.activity_name.trim();
@@ -287,6 +394,12 @@ Useful for reclassifying a mislabelled activity, e.g. flipping a run logged as '
           "Target activity type key (e.g. 'running', 'trail_running', 'treadmill_running', 'cycling', 'lap_swimming')"
         ),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      type_key: z.string().optional(),
+      type_id: z.unknown().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       const typeKey = args.type_key.trim();
@@ -325,6 +438,11 @@ This is the notes field shown on the activity page — useful for recording how 
       activity_id: idParam.describe("ID of the activity to update"),
       description: z.string().describe("New description text (empty string clears it)"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      description: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       await putActivity(ctx, id, { description: args.description });
@@ -345,6 +463,11 @@ Event type categorises the activity's purpose. Valid keys: race, recreation, spe
       activity_id: idParam.describe("ID of the activity to update"),
       event_type: z.string().describe("Target event type key (e.g. 'race', 'training')"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      event_type: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       const eventType = args.event_type.trim();
@@ -381,6 +504,11 @@ Mirrors Garmin Connect's 'Perceived Effort' rating on a 0-10 scale, where 0 clea
       activity_id: idParam.describe("ID of the activity to update"),
       rpe: z.number().describe("Perceived effort from 0 to 10 (0 clears the rating)"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      rpe: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       if (args.rpe < 0 || args.rpe > 10) return "rpe must be between 0 and 10";
@@ -408,6 +536,11 @@ Higher is better.`,
       activity_id: idParam.describe("ID of the activity to update"),
       feel: z.number().int().describe("One of 0, 25, 50, 75, 100"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      feel: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       if (![0, 25, 50, 75, 100].includes(args.feel)) {
@@ -426,6 +559,59 @@ Higher is better.`,
     name: "get_activity_splits",
     desc: "Get splits for an activity",
     params: { activity_id: idParam.describe("ID of the activity to retrieve splits for") },
+    outputSchema: withMessage({
+      activity_id: z.number().optional(),
+      lap_count: z.number().optional(),
+      laps: z
+        .array(
+          z.object({
+            lap_number: z.number().optional(),
+            start_time: z.string().optional(),
+            distance_meters: z.number().optional(),
+            duration_seconds: z.number().optional(),
+            moving_duration_seconds: z.number().optional(),
+            elapsed_duration_seconds: z.number().optional(),
+            avg_speed_mps: z.number().optional(),
+            avg_moving_speed_mps: z.number().optional(),
+            max_speed_mps: z.number().optional(),
+            avg_hr_bpm: z.number().optional(),
+            max_hr_bpm: z.number().optional(),
+            calories: z.number().optional(),
+            bmr_calories: z.number().optional(),
+            avg_cadence: z.number().optional(),
+            avg_power_watts: z.number().optional(),
+            avg_swim_cadence: z.number().optional(),
+            active_length_count: z.number().optional(),
+            total_strokes: z.number().optional(),
+            avg_strokes: z.number().optional(),
+            avg_swolf: z.number().optional(),
+            avg_stroke_distance: z.number().optional(),
+            intensity_type: z.string().optional(),
+            elevation_gain_meters: z.number().optional(),
+            elevation_loss_meters: z.number().optional(),
+            workout_step_index: z.number().optional(),
+            lengths: z
+              .array(
+                z.object({
+                  length_number: z.number().optional(),
+                  start_time: z.string().optional(),
+                  distance_meters: z.number().optional(),
+                  duration_seconds: z.number().optional(),
+                  avg_speed_mps: z.number().optional(),
+                  max_speed_mps: z.number().optional(),
+                  calories: z.number().optional(),
+                  avg_hr_bpm: z.number().optional(),
+                  max_hr_bpm: z.number().optional(),
+                  total_strokes: z.number().optional(),
+                  avg_swolf: z.number().optional(),
+                  stroke: z.string().optional(),
+                })
+              )
+              .optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       const splits = (await ctx.api(`${ACTIVITY}/${id}/splits`)) as Record<string, any> | null;
@@ -519,6 +705,23 @@ Garmin's weather endpoint returns temperatures in Fahrenheit (from the weather-s
 
 Wind speed, unlike temperature, is already returned in the account's display unit (km/h for metric, mph for statute_us), so it is passed through unconverted and labeled via the wind_speed_unit field.`,
     params: { activity_id: idParam.describe("ID of the activity to retrieve weather data for") },
+    outputSchema: withMessage({
+      activity_id: z.number().optional(),
+      temperature: z.number().optional(),
+      temperature_unit: z.string().optional(),
+      apparent_temperature: z.number().optional(),
+      dew_point: z.number().optional(),
+      humidity_percent: z.number().optional(),
+      wind_speed: z.number().optional(),
+      wind_speed_unit: z.string().optional(),
+      wind_direction_degrees: z.number().optional(),
+      wind_direction_compass: z.string().optional(),
+      wind_gust: z.number().optional(),
+      weather_description: z.string().optional(),
+      station_id: z.unknown().optional(),
+      station_name: z.string().optional(),
+      issue_time: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const id = actId(args.activity_id);
       const weather = (await ctx.api(`${ACTIVITY}/${id}/weather`)) as Record<string, any> | null;
@@ -617,6 +820,10 @@ Returns time spent in each power zone with watt thresholds and duration. Require
     desc: `Get total count of activities in the user's Garmin account
 
 Returns the total number of activities recorded.`,
+    outputSchema: withMessage({
+      total_activities: z.unknown().optional(),
+      note: z.string().optional(),
+    }),
     run: async (_args, ctx) => {
       const data = (await ctx.api("/activitylist-service/activities/count")) as Record<
         string,
@@ -645,6 +852,23 @@ Each activity includes an event_type field. Common values: "race", "training", "
         .default(20)
         .describe("Maximum number of activities to return (default 20, max 100)"),
     },
+    outputSchema: withMessage({
+      start: z.number().optional(),
+      limit: z.number().optional(),
+      count: z.number().optional(),
+      has_more: z.boolean().optional(),
+      // emitted as explicit null on the last page (not stripped)
+      next_start: z.number().nullable().optional(),
+      activities: z
+        .array(
+          z.object({
+            ...listActivityShape,
+            moving_duration_seconds: z.number().optional(),
+            owner_display_name: z.string().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const limit = Math.min(Math.max(1, args.limit), 100);
       const activities = ((await ctx.api(ACTIVITIES, {
@@ -691,6 +915,10 @@ The type_key must match a Garmin activity type. Use get_activity_types to see th
         .describe("Distance in kilometres (default 0.0 for non-distance activities)"),
       time_zone: z.string().default("UTC").describe("IANA time zone for the activity (default UTC)"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity: z.unknown().optional(),
+    }),
     run: async (args, ctx) => {
       const typeKey = args.type_key.trim();
       if (!typeKey) return "Error: type_key is required";
@@ -728,6 +956,20 @@ The type_key must match a Garmin activity type. Use get_activity_types to see th
     desc: `Get all available activity types
 
 Returns a list of all activity types supported by Garmin Connect, useful for filtering activities by type.`,
+    outputSchema: withMessage({
+      count: z.number().optional(),
+      activity_types: z
+        .array(
+          z.object({
+            type_id: z.number().optional(),
+            type_key: z.string().optional(),
+            display_name: z.unknown().optional(),
+            parent_type_id: z.number().optional(),
+            is_hidden: z.boolean().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (_args, ctx) => {
       const types = ((await ctx.api(`${ACTIVITY}/activityTypes`)) ?? []) as Record<string, any>[];
       if (!types.length) return "No activity types found";
@@ -755,6 +997,7 @@ For TCX/GPX pass the XML as text in \`content\`; for FIT pass base64 in \`conten
       content: z.string().optional().describe("File content as text (TCX or GPX XML)"),
       content_base64: z.string().optional().describe("File content as base64 (FIT binary)"),
     },
+    outputSchema: uploadResultSchema,
     run: async (args, ctx) => {
       const ext = args.filename.split(".").pop()?.toLowerCase();
       if (!ext || !["fit", "tcx", "gpx"].includes(ext))
@@ -788,6 +1031,7 @@ TCX supports only Running / Biking / Other sport granularity; rename or re-type 
         .describe("Heart-rate samples across the activity"),
       distance_meters: z.number().min(0).default(0).describe("Optional total distance in meters"),
     },
+    outputSchema: uploadResultSchema,
     run: async (args, ctx) => {
       const tcx = buildHrTcx(args.start_time, TCX_SPORT[args.sport], args.samples, args.distance_meters);
       const filename = `hr-activity-${args.start_time.replace(/[:.]/g, "-")}.tcx`;

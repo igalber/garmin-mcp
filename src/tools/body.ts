@@ -1,6 +1,14 @@
 import { z } from "zod";
 import type { Ctx, ToolDef } from "../toolkit";
-import { addDays, assertSpan, dateStr, isoDate, parseDate, stripNulls } from "../toolkit";
+import {
+  addDays,
+  assertSpan,
+  dateStr,
+  isoDate,
+  parseDate,
+  stripNulls,
+  withMessage,
+} from "../toolkit";
 import { encodeWeightFit } from "../fit";
 
 const WEIGHT = "/weight-service";
@@ -39,6 +47,19 @@ function curateMeasurement(w: Record<string, any>): Record<string, any> {
     timestamp_gmt: w.timestampGMT,
   });
 }
+
+// timestampGMT is copied raw (epoch ms in some responses), so it stays unknown
+const measurementShape = {
+  weight_grams: z.number().optional(),
+  weight_kg: z.number().optional(),
+  bmi: z.number().optional(),
+  body_fat_percent: z.number().optional(),
+  body_water_percent: z.number().optional(),
+  bone_mass_grams: z.number().optional(),
+  muscle_mass_grams: z.number().optional(),
+  source_type: z.string().optional(),
+  timestamp_gmt: z.unknown().optional(),
+};
 
 function appendAverage(curated: Record<string, any>, data: Record<string, any>) {
   const avg = data?.totalAverage ?? {};
@@ -225,6 +246,17 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      date_range: z.object({ start: z.string().optional(), end: z.string().optional() }).optional(),
+      measurement_count: z.number().optional(),
+      days_with_data: z.number().optional(),
+      // date is not null-stripped (set before the spread), so it stays unknown
+      measurements: z
+        .array(z.object({ date: z.unknown().optional(), ...measurementShape }))
+        .optional(),
+      average_weight_grams: z.number().optional(),
+      average_weight_kg: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const data = (await ctx.api(
         `${WEIGHT}/weight/range/${args.start_date}/${args.end_date}`,
@@ -253,6 +285,13 @@ export const tools: ToolDef[] = [
     name: "get_daily_weigh_ins",
     desc: "Get weight measurements for a specific date",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      measurement_count: z.number().optional(),
+      measurements: z.array(z.object(measurementShape)).optional(),
+      average_weight_grams: z.number().optional(),
+      average_weight_kg: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const data = (await ctx.api(`${WEIGHT}/weight/dayview/${args.date}`, {
         params: { includeAll: "true" },
@@ -279,6 +318,11 @@ export const tools: ToolDef[] = [
         .default(true)
         .describe("Whether to delete all measurements for the day"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      date: z.string().optional(),
+      deleted_count: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const day = (await ctx.api(`${WEIGHT}/weight/dayview/${args.date}`, {
         params: { includeAll: "true" },
@@ -317,6 +361,11 @@ export const tools: ToolDef[] = [
       weight: z.number().positive().describe("Weight value"),
       unit_key: unitKeyParam,
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      weight: z.number().optional(),
+      unit: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const ts = fmtTs(new Date());
       await postWeighIn(ctx, args.weight, args.unit_key, ts, ts);
@@ -343,6 +392,13 @@ export const tools: ToolDef[] = [
         .optional()
         .describe("GMT timestamp in format YYYY-MM-DDThh:mm:ss"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      weight: z.number().optional(),
+      unit: z.string().optional(),
+      timestamp_local: z.string().optional(),
+      timestamp_gmt: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       let { date_timestamp, gmt_timestamp } = args as {
         date_timestamp?: string;
@@ -502,6 +558,24 @@ export const tools: ToolDef[] = [
   {
     name: "get_courses",
     desc: "List all courses saved on Garmin Connect. Returns a curated list of courses with id, name, distance, activity type and creation date.",
+    // course fields are copied raw without stripNulls (elevation/activity can be null) -> unknown
+    outputSchema: withMessage({
+      count: z.number().optional(),
+      courses: z
+        .array(
+          z.object({
+            course_id: z.unknown().optional(),
+            name: z.unknown().optional(),
+            distance_m: z.unknown().optional(),
+            elevation_gain_m: z.unknown().optional(),
+            elevation_loss_m: z.unknown().optional(),
+            activity: z.unknown().optional(),
+            has_pace_band: z.unknown().optional(),
+            created: z.unknown().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (_args, ctx) => {
       const data = await ctx.api(COURSE);
       if (!Array.isArray(data)) return data;
@@ -542,6 +616,17 @@ export const tools: ToolDef[] = [
         .optional()
         .describe("Optional description shown on the course detail page."),
     },
+    // saved.* fields are copied raw without stripNulls -> unknown
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      course_id: z.unknown().optional(),
+      name: z.unknown().optional(),
+      distance_m: z.unknown().optional(),
+      elevation_gain_m: z.unknown().optional(),
+      elevation_loss_m: z.unknown().optional(),
+      activity_type_id: z.unknown().optional(),
+      url: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const activityTypeId = ACTIVITY_TYPE_IDS[args.activity_type.toLowerCase()];
       if (activityTypeId === undefined)
@@ -594,6 +679,10 @@ export const tools: ToolDef[] = [
     params: {
       course_id: z.number().int().describe("ID of the course to delete (get IDs from get_courses)"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      course_id: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       await ctx.api(`${COURSE}/${args.course_id}`, { method: "DELETE" });
       return {

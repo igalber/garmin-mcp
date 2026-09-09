@@ -1,10 +1,11 @@
 import { z } from "zod";
-import type { ToolDef } from "../toolkit";
+import { withMessage, type ToolDef } from "../toolkit";
 
 export const tools: ToolDef[] = [
   {
     name: "get_full_name",
     desc: "Get user's full name from profile",
+    outputSchema: withMessage({ full_name: z.string().optional() }),
     run: async (_args, ctx) => {
       const p = (await ctx.api("/userprofile-service/socialProfile")) as { fullName?: string };
       return { full_name: p.fullName };
@@ -13,6 +14,7 @@ export const tools: ToolDef[] = [
   {
     name: "get_unit_system",
     desc: "Get user's preferred unit system from profile",
+    outputSchema: withMessage({ unit_system: z.string().optional() }),
     run: async (_args, ctx) => {
       const s = (await ctx.api("/userprofile-service/userprofile/user-settings")) as {
         userData?: { measurementSystem?: string };

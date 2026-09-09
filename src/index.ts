@@ -31,9 +31,18 @@ const ALL_TOOLS: ToolDef[] = [
   ...analysisTools,
 ];
 
-const json = (data: unknown) => ({
-  content: [{ type: "text" as const, text: JSON.stringify(data) }],
-});
+// Text content always carries the raw result. When a tool declares an outputSchema the SDK
+// requires structuredContent (an object), so fold strings -> {message} and arrays -> {items}.
+const toResult = (data: unknown, structured: boolean) => {
+  const content = [{ type: "text" as const, text: JSON.stringify(data) }];
+  if (!structured) return { content };
+  const structuredContent: Record<string, unknown> = Array.isArray(data)
+    ? { items: data }
+    : data !== null && typeof data === "object"
+      ? (data as Record<string, unknown>)
+      : { message: String(data) };
+  return { content, structuredContent };
+};
 
 export class GarminMCP extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "garmin", version: "0.2.0" });
@@ -79,15 +88,20 @@ export class GarminMCP extends McpAgent<Env, unknown, Props> {
     for (const t of ALL_TOOLS) {
       if (seen.has(t.name)) continue;
       seen.add(t.name);
+      const structured = !!t.outputSchema;
+      const config = {
+        description: t.desc,
+        ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+      };
       if (t.params) {
         this.server.registerTool(
           t.name,
-          { description: t.desc, inputSchema: t.params },
-          async (args: Record<string, unknown>) => json(await t.run(args, ctx))
+          { ...config, inputSchema: t.params },
+          async (args: Record<string, unknown>) => toResult(await t.run(args, ctx), structured)
         );
       } else {
-        this.server.registerTool(t.name, { description: t.desc }, async () =>
-          json(await t.run({}, ctx))
+        this.server.registerTool(t.name, config, async () =>
+          toResult(await t.run({}, ctx), structured)
         );
       }
     }

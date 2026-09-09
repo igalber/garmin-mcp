@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Ctx, ToolDef } from "../toolkit";
-import { stripNulls } from "../toolkit";
+import { stripNulls, withMessage } from "../toolkit";
 
 // Mappings below are estimated from real data and might not be 100% accurate
 
@@ -216,6 +216,32 @@ async function fetchChallenges(
 const descByStartDate = (a: Record<string, any>, b: Record<string, any>) =>
   (b.start_date ?? "") < (a.start_date ?? "") ? -1 : (b.start_date ?? "") > (a.start_date ?? "") ? 1 : 0;
 
+// Output schema pieces. Raw Garmin values are z.unknown(); formatted strings built above are
+// nullable because the curators emit explicit nulls (no stripNulls) for missing inputs.
+const raw = z.unknown().optional();
+const nullableStr = z.string().nullable().optional();
+
+const badgeChallengeShape = {
+  name: raw,
+  uuid: raw,
+  category: z.string().optional(),
+  status: z.string().optional(),
+  points: raw,
+  start_date: nullableStr,
+  end_date: nullableStr,
+  joined: raw,
+  progress: nullableStr,
+  target: nullableStr,
+  progress_percent: nullableStr,
+  earned_date: nullableStr,
+};
+
+const challengesOutput = (item: z.ZodRawShape) =>
+  withMessage({
+    total: z.number().optional(),
+    challenges: z.array(z.object(item)).optional(),
+  });
+
 export const tools: ToolDef[] = [
   {
     name: "get_goals",
@@ -249,6 +275,20 @@ export const tools: ToolDef[] = [
   {
     name: "get_personal_record",
     desc: "Get personal records for user",
+    outputSchema: withMessage({
+      items: z
+        .array(
+          z.object({
+            record_type: z.string().optional(),
+            type_id: raw,
+            value: nullableStr,
+            raw_value: raw,
+            date: nullableStr,
+            activity_id: raw,
+          })
+        )
+        .optional(),
+    }),
     run: async (_args, ctx) => {
       const records = (await ctx.api(
         `/personalrecord-service/personalrecord/prs/${await ctx.displayName()}`
@@ -278,6 +318,25 @@ export const tools: ToolDef[] = [
   {
     name: "get_earned_badges",
     desc: "Get earned badges for user",
+    outputSchema: withMessage({
+      total_badges: z.number().optional(),
+      badges: z
+        .array(
+          z.object({
+            name: raw,
+            category: z.string().optional(),
+            difficulty: z.string().optional(),
+            points: raw,
+            earned_date: nullableStr,
+            progress: nullableStr,
+            target: nullableStr,
+            challenge_period: z.string().optional(),
+            activity_id: raw,
+            series_id: raw,
+          })
+        )
+        .optional(),
+    }),
     run: async (_args, ctx) => {
       const badges = (await ctx.api("/badge-service/badge/earned")) as Record<string, any>[];
       if (!badges || badges.length === 0) return "No earned badges found.";
@@ -330,6 +389,17 @@ export const tools: ToolDef[] = [
         .default(20)
         .describe("Maximum number of challenges to return (default 20, max 100)"),
     },
+    outputSchema: challengesOutput({
+      name: raw,
+      description: raw,
+      uuid: raw,
+      activity_type: z.string().optional(),
+      status: z.string().optional(),
+      start_date: nullableStr,
+      end_date: nullableStr,
+      your_ranking: raw,
+      player_count: raw,
+    }),
     run: async (args, ctx) => {
       const challenges = await fetchChallenges(
         ctx,
@@ -366,6 +436,7 @@ export const tools: ToolDef[] = [
       "Returns monthly/seasonal challenges from Garmin that the user can join. " +
       "These challenges award badges and points upon completion.",
     params: challengeListParams,
+    outputSchema: challengesOutput({ ...badgeChallengeShape, joinable: raw }),
     run: async (args, ctx) => {
       const challenges = await fetchChallenges(
         ctx,
@@ -391,6 +462,7 @@ export const tools: ToolDef[] = [
       "Returns the user's history of badge challenges including progress, " +
       "completion status, and earned dates.",
     params: challengeListParams,
+    outputSchema: challengesOutput(badgeChallengeShape),
     run: async (args, ctx) => {
       const challenges = await fetchChallenges(
         ctx,
@@ -412,6 +484,7 @@ export const tools: ToolDef[] = [
       "Returns active challenges the user has joined but hasn't completed yet. " +
       "Useful for tracking current progress toward badge goals.",
     params: challengeListParams,
+    outputSchema: challengesOutput(badgeChallengeShape),
     run: async (args, ctx) => {
       const challenges = await fetchChallenges(
         ctx,
@@ -432,6 +505,17 @@ export const tools: ToolDef[] = [
       "Get predicted race times based on current fitness level. " +
       "Returns Garmin's predictions for 5K, 10K, half marathon, and marathon " +
       "finish times based on the user's recent training data and VO2 max.",
+    outputSchema: withMessage({
+      prediction_date: raw,
+      predictions: z
+        .object({
+          "5K": z.object({ time: nullableStr, time_seconds: raw }).optional(),
+          "10K": z.object({ time: nullableStr, time_seconds: raw }).optional(),
+          half_marathon: z.object({ time: nullableStr, time_seconds: raw }).optional(),
+          marathon: z.object({ time: nullableStr, time_seconds: raw }).optional(),
+        })
+        .optional(),
+    }),
     run: async (_args, ctx) => {
       const p = (await ctx.api(
         `/metrics-service/metrics/racepredictions/latest/${await ctx.displayName()}`
@@ -471,6 +555,19 @@ export const tools: ToolDef[] = [
         .default(20)
         .describe("Maximum number of challenges to return (default 20, max 100)"),
     },
+    outputSchema: challengesOutput({
+      name: raw,
+      uuid: raw,
+      start_date: nullableStr,
+      end_date: nullableStr,
+      progress_meters: raw,
+      target_meters: raw,
+      progress_km: z.string().optional(),
+      target_km: z.string().optional(),
+      progress: nullableStr,
+      target: nullableStr,
+      progress_percent: nullableStr,
+    }),
     run: async (args, ctx) => {
       const challenges = (await ctx.api(
         "/badgechallenge-service/virtualChallenge/inProgress",
@@ -521,6 +618,25 @@ export const tools: ToolDef[] = [
   {
     name: "get_devices",
     desc: "Get all Garmin devices associated with the user account",
+    outputSchema: withMessage({
+      items: z
+        .array(
+          z.object({
+            device_id: raw,
+            device_name: raw,
+            model: raw,
+            manufacturer: raw,
+            serial_number: raw,
+            software_version: raw,
+            status: raw,
+            last_sync_time: raw,
+            battery_status: raw,
+            device_type: raw,
+            is_primary: raw,
+          })
+        )
+        .optional(),
+    }),
     run: async (_args, ctx) => {
       const devices = (await ctx.api("/device-service/deviceregistration/devices")) as Record<
         string,
@@ -550,6 +666,14 @@ export const tools: ToolDef[] = [
   {
     name: "get_device_last_used",
     desc: "Get information about the last used Garmin device",
+    outputSchema: withMessage({
+      user_device_id: raw,
+      device_name: raw,
+      device_key: raw,
+      user_profile_id: raw,
+      last_upload_time: z.string().optional(),
+      image_url: raw,
+    }),
     run: async (_args, ctx) => {
       const device = (await ctx.api("/device-service/deviceservice/mylastused")) as Record<
         string,
@@ -587,6 +711,25 @@ export const tools: ToolDef[] = [
             "can be obtained from get_devices or get_device_last_used)"
         ),
     },
+    outputSchema: withMessage({
+      device_id: raw,
+      time_format: raw,
+      date_format: raw,
+      measurement_units: raw,
+      key_tones_enabled: raw,
+      key_vibration_enabled: raw,
+      alert_tones_enabled: raw,
+      activity_tracking: z
+        .object({
+          move_alert_enabled: raw,
+          pulse_ox_sleep_tracking: raw,
+          high_hr_alert_enabled: raw,
+          low_hr_alert_enabled: raw,
+        })
+        .optional(),
+      alarm_count: z.number().optional(),
+      enabled_alarm_count: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       let deviceId = args.device_id;
       if (deviceId == null) {
@@ -641,6 +784,22 @@ export const tools: ToolDef[] = [
       "Get information about the primary training device. " +
       "Returns details about the device designated as primary for training " +
       "metrics, along with other wearable devices on the account.",
+    outputSchema: withMessage({
+      primary_device_id: raw,
+      training_devices: z
+        .array(
+          z.object({
+            device_id: raw,
+            display_name: raw,
+            is_primary_wearable: raw,
+            primary_training_capable: raw,
+            image_url: raw,
+          })
+        )
+        .optional(),
+      training_device_count: z.number().optional(),
+      wearable_device_count: raw,
+    }),
     run: async (_args, ctx) => {
       const data = (await ctx.api("/web-gateway/device-info/primary-training-device")) as Record<
         string,
@@ -683,6 +842,21 @@ export const tools: ToolDef[] = [
       device_id: z.string().describe("Device ID (can be obtained from get_devices)"),
       date: z.string().describe("Date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      device_id: z.string().optional(),
+      solar_data: z
+        .array(
+          z.object({
+            date: raw,
+            solar_intensity_avg: raw,
+            solar_intensity_max: raw,
+            battery_charged_percent: raw,
+            battery_used_percent: raw,
+            battery_net_percent: raw,
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const resp = (await ctx.api(
         `/web-gateway/solar/${args.device_id}/${args.date}/${args.date}`,
@@ -714,6 +888,24 @@ export const tools: ToolDef[] = [
     desc:
       "Get alarms from all Garmin devices. " +
       "Returns all configured alarms with their schedules, sounds, and enabled status.",
+    outputSchema: withMessage({
+      total_alarms: z.number().optional(),
+      enabled_alarms: z.number().optional(),
+      alarms: z
+        .array(
+          z.object({
+            alarm_id: raw,
+            time: nullableStr,
+            time_minutes: raw,
+            enabled: z.boolean().optional(),
+            days: raw,
+            sound: raw,
+            backlight: raw,
+            message: raw,
+          })
+        )
+        .optional(),
+    }),
     run: async (_args, ctx) => {
       const devices = ((await ctx.api("/device-service/deviceregistration/devices")) ??
         []) as Record<string, any>[];
@@ -765,6 +957,33 @@ export const tools: ToolDef[] = [
             "Set to False for faster response with large gear collections."
         ),
     },
+    outputSchema: withMessage({
+      gear_count: z.number().optional(),
+      active_count: z.number().optional(),
+      retired_count: z.number().optional(),
+      defaults: z.record(z.unknown()).optional(),
+      gear: z
+        .array(
+          z.object({
+            uuid: raw,
+            name: raw,
+            full_name: raw,
+            type: raw,
+            status: z.string().optional(),
+            date_begin: nullableStr,
+            date_end: nullableStr,
+            max_distance_km: z.number().optional(),
+            is_default_for: z.array(z.string()).optional(),
+            stats: z
+              .object({
+                total_activities: raw,
+                total_distance_km: z.number().optional(),
+              })
+              .optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const deviceInfo = (await ctx.api("/device-service/deviceservice/mylastused")) as Record<
         string,
@@ -866,6 +1085,11 @@ export const tools: ToolDef[] = [
       activity_id: z.number().int().describe("ID of the activity"),
       gear_uuid: z.string().describe("UUID of the gear to add (get from get_gear)"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      gear_uuid: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       await ctx.api(`/gear-service/gear/link/${args.gear_uuid}/activity/${args.activity_id}`, {
         method: "PUT",
@@ -887,6 +1111,11 @@ export const tools: ToolDef[] = [
       activity_id: z.number().int().describe("ID of the activity"),
       gear_uuid: z.string().describe("UUID of the gear to remove"),
     },
+    outputSchema: withMessage({
+      success: z.boolean().optional(),
+      activity_id: z.number().optional(),
+      gear_uuid: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       await ctx.api(`/gear-service/gear/unlink/${args.gear_uuid}/activity/${args.activity_id}`, {
         method: "PUT",

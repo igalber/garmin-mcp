@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Ctx, ToolDef } from "../toolkit";
-import { dateStr, stripNulls } from "../toolkit";
+import { dateStr, stripNulls, withMessage } from "../toolkit";
 
 type Dict = Record<string, any>;
 
@@ -479,6 +479,108 @@ function curateScheduledWorkout(scheduled: Dict): Dict {
   return stripNulls(summary);
 }
 
+// Output schemas for the curated shapes above. Garmin-sourced values without a codebase-asserted
+// type stay z.unknown(); a wrong strict type would fail the whole tool call.
+const workoutSummarySchema = z.object({
+  id: z.number().optional(),
+  name: z.string().optional(),
+  sport: z.string().optional(),
+  provider: z.unknown().optional(),
+  created_date: z.unknown().optional(),
+  updated_date: z.unknown().optional(),
+  description: z.string().optional(),
+  estimated_duration_seconds: z.number().optional(),
+  estimated_distance_meters: z.number().optional(),
+});
+
+const workoutStepSchema = z.object({
+  order: z.number().optional(),
+  type: z.string().optional(),
+  description: z.string().optional(),
+  end_condition: z.string().optional(),
+  end_condition_value: z.number().optional(),
+  target_type: z.string().optional(),
+  target_value_low: z.number().optional(),
+  target_value_high: z.number().optional(),
+  target_zone: z.number().optional(),
+  secondary_target_type: z.string().optional(),
+  secondary_target_value_low: z.number().optional(),
+  secondary_target_value_high: z.number().optional(),
+  secondary_target_zone: z.number().optional(),
+  stroke_type: z.string().optional(),
+  equipment_type: z.string().optional(),
+  drill_type: z.string().optional(),
+  category: z.string().optional(),
+  exercise_name: z.string().optional(),
+  weight_value: z.number().optional(),
+  weight_unit: z.string().optional(),
+  repeat_count: z.number().optional(),
+  // ponytail: repeat-group children left loose rather than a recursive z.lazy schema
+  steps: z.array(z.record(z.unknown())).optional(),
+  step_count: z.number().optional(),
+});
+
+const workoutSegmentSchema = z.object({
+  order: z.number().optional(),
+  sport: z.string().optional(),
+  estimated_duration_seconds: z.number().optional(),
+  estimated_distance_meters: z.number().optional(),
+  steps: z.array(workoutStepSchema).optional(),
+  step_count: z.number().optional(),
+});
+
+const scheduledWorkoutSchema = z.object({
+  date: z.string().optional(),
+  scheduled_workout_id: z.number().optional(),
+  workout_uuid: z.string().optional(),
+  workout_id: z.number().optional(),
+  training_plan_id: z.unknown().optional(),
+  fbt_adaptive_plan_id: z.unknown().optional(),
+  tp_type: z.unknown().optional(),
+  name: z.string().optional(),
+  sport: z.unknown().optional(),
+  completed: z.boolean().optional(),
+  training_plan: z.unknown().optional(),
+  workout_type: z.unknown().optional(),
+  is_rest_day: z.boolean().optional(),
+  is_race_day: z.boolean().optional(),
+  estimated_duration_seconds: z.number().optional(),
+  estimated_distance_meters: z.number().optional(),
+  activity_id: z.unknown().optional(),
+});
+
+const coachWorkoutsSchema = withMessage({
+  date: z.string().optional(),
+  training_plans: z.array(z.string()).optional(),
+  plans: z
+    .array(
+      z.object({
+        name: z.string().optional(),
+        training_plan_id: z.unknown().optional(),
+        classification: z.unknown().optional(),
+        training_type: z.unknown().optional(),
+      })
+    )
+    .optional(),
+  count: z.number().optional(),
+  workouts: z.array(scheduledWorkoutSchema).optional(),
+});
+
+// curateUploadResult shape, shared by upload_workout and the builders
+const uploadResultSchema = withMessage({
+  status: z.string().optional(),
+  workout_id: z.number().optional(),
+  name: z.string().optional(),
+});
+
+const batchSchema = (item: z.ZodRawShape): z.ZodRawShape =>
+  withMessage({
+    total: z.number().optional(),
+    succeeded: z.number().optional(),
+    failed: z.number().optional(),
+    results: z.array(z.object(item)).optional(),
+  });
+
 // ============================================================================
 // API helpers
 // ============================================================================
@@ -871,6 +973,10 @@ export const tools: ToolDef[] = [
 
 Returns a count and list of workout summaries with essential metadata only.
 For detailed workout information including segments, use get_workout_by_id.`,
+    outputSchema: withMessage({
+      count: z.number().optional(),
+      workouts: z.array(workoutSummarySchema).optional(),
+    }),
     run: async (_args, ctx) => {
       const workouts = (await ctx.api("/workout-service/workouts", {
         params: { start: "0", limit: "100" },
@@ -895,6 +1001,24 @@ Rest-day UUIDs can resolve to a minimal record without a workout name or segment
         .union([z.number(), z.string()])
         .describe("Workout ID (numeric) or UUID (for training plan workouts)"),
     },
+    outputSchema: withMessage({
+      id: z.number().optional(),
+      uuid: z.string().optional(),
+      name: z.string().optional(),
+      sport: z.string().optional(),
+      provider: z.unknown().optional(),
+      created_date: z.unknown().optional(),
+      updated_date: z.unknown().optional(),
+      description: z.string().optional(),
+      estimated_duration_seconds: z.number().optional(),
+      estimated_distance_meters: z.number().optional(),
+      avg_training_speed_mps: z.number().optional(),
+      workout_type: z.unknown().optional(),
+      training_effect_label: z.unknown().optional(),
+      estimated_training_effect: z.unknown().optional(),
+      segments: z.array(workoutSegmentSchema).optional(),
+      segment_count: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const workoutIdStr = String(args.workout_id);
       // UUIDs (contain dashes) live on the fbt-adaptive endpoint
@@ -915,6 +1039,11 @@ directly through the MCP interface, but this confirms the workout is available.`
     params: {
       workout_id: z.number().describe("ID of the workout to download"),
     },
+    outputSchema: withMessage({
+      workout_id: z.number().optional(),
+      format: z.string().optional(),
+      size_bytes: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const res = (await ctx.api(`/workout-service/workout/FIT/${args.workout_id}`, {
         binary: true,
@@ -1036,6 +1165,7 @@ Example running workout with HR zone target:
           "Dictionary containing workout structure (workoutName, sportType, workoutSegments with workoutSteps, etc.)"
         ),
     },
+    outputSchema: uploadResultSchema,
     run: async (args, ctx) => {
       const result = await uploadWithGuards(ctx, args.workout_data as Dict);
       return curateUploadResult(result);
@@ -1075,6 +1205,13 @@ Max 40 workouts per call.`,
           "List of workout dictionaries, each containing workout structure (name, sport type, segments, etc.) — same format as upload_workout"
         ),
     },
+    outputSchema: batchSchema({
+      status: z.string().optional(),
+      workout_id: z.number().optional(),
+      // error path echoes the caller's raw workoutName
+      name: z.unknown().optional(),
+      message: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const workouts = args.workouts as Dict[];
       capBatch(workouts.length);
@@ -1114,6 +1251,10 @@ Permanently removes a workout from your Garmin Connect workout library.`,
     params: {
       workout_id: z.number().describe("ID of the workout to delete (get IDs from get_workouts)"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      workout_id: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       try {
         await ctx.api(`/workout-service/workout/${args.workout_id}`, { method: "DELETE" });
@@ -1142,6 +1283,11 @@ Max 40 workout IDs per call.`,
         .array(z.number())
         .describe("List of workout IDs to delete (get IDs from get_workouts)"),
     },
+    outputSchema: batchSchema({
+      status: z.string().optional(),
+      workout_id: z.number().optional(),
+      message: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const ids = args.workout_ids as number[];
       capBatch(ids.length);
@@ -1176,6 +1322,13 @@ including their scheduled dates and completion status.`,
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      count: z.number().optional(),
+      date_range: z
+        .object({ start: z.string().optional(), end: z.string().optional() })
+        .optional(),
+      scheduled_workouts: z.array(scheduledWorkoutSchema).optional(),
+    }),
     run: async (args, ctx) => {
       const result = (await gql(
         ctx,
@@ -1224,6 +1377,7 @@ workout segments.`,
         "Reference date in YYYY-MM-DD format (returns week's workouts)"
       ),
     },
+    outputSchema: coachWorkoutsSchema,
     run: (args, ctx) => getGarminCoachWorkouts(ctx, args.calendar_date),
   },
   {
@@ -1244,6 +1398,7 @@ present to get_workout_by_id. The returned count includes rest days.`,
         "Reference date in YYYY-MM-DD format (returns week's workouts)"
       ),
     },
+    outputSchema: coachWorkoutsSchema,
     run: (args, ctx) => getGarminCoachWorkouts(ctx, args.calendar_date),
   },
   {
@@ -1259,6 +1414,12 @@ is a no-op that reports success without creating a duplicate entry.`,
       workout_id: z.number().describe("ID of the workout to schedule (get IDs from get_workouts)"),
       calendar_date: dateStr.describe("Date to schedule the workout in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      workout_id: z.number().optional(),
+      scheduled_date: z.string().optional(),
+      idempotent: z.boolean().optional(),
+    }),
     run: async (args, ctx) => {
       if (await isAlreadyScheduled(ctx, args.workout_id, args.calendar_date)) {
         return {
@@ -1304,6 +1465,15 @@ Examples:
           "List of schedules, each with: calendar_date (YYYY-MM-DD, required); workout_id (number, required unless workout_data is provided); workout_data (object, optional inline workout JSON to upload first then schedule — same structure and target-value rules as upload_workout)"
         ),
     },
+    // workout_id/scheduled_date echo unvalidated caller input (and an explicit null) on failure paths
+    outputSchema: batchSchema({
+      status: z.string().optional(),
+      workout_id: z.unknown().optional(),
+      scheduled_date: z.unknown().optional(),
+      idempotent: z.boolean().optional(),
+      workout_name: z.string().optional(),
+      message: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const schedules = args.schedules as Dict[];
       capBatch(schedules.length);
@@ -1417,6 +1587,10 @@ so the id is available.`,
         .number()
         .describe("Calendar-entry id from get_scheduled_workouts"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      scheduled_workout_id: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       try {
         await ctx.api(`/workout-service/schedule/${args.scheduled_workout_id}`, {
@@ -1452,6 +1626,11 @@ Max 40 ids per call.`,
         .array(z.number())
         .describe("List of calendar-entry ids from get_scheduled_workouts"),
     },
+    outputSchema: batchSchema({
+      status: z.string().optional(),
+      scheduled_workout_id: z.number().optional(),
+      message: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const ids = args.scheduled_workout_ids as number[];
       capBatch(ids.length);
@@ -1495,6 +1674,7 @@ Builds the internal Garmin JSON automatically and returns the new workout ID.`,
       cooldown_min: z.number().int().describe("Cooldown duration in minutes"),
       hr_zone: z.string().default("Z3").describe("Target heart-rate zone (Z1-Z5, default Z3)"),
     },
+    outputSchema: uploadResultSchema,
     run: async (args, ctx) => {
       const workoutJson = buildWalkRunJson(
         args.name,
@@ -1540,6 +1720,7 @@ want, not a whole zone that over- or under-shoots it.`,
         .optional()
         .describe("Optional custom target heart rate range, maximum bpm (must be given with hr_min)"),
     },
+    outputSchema: uploadResultSchema,
     run: async (args, ctx) => {
       const workoutJson = buildRunJson(
         args.name,
@@ -1568,6 +1749,7 @@ want, not a whole zone that over- or under-shoots it.`,
         .int()
         .describe("Maximum heart rate in bpm (used for description; target is Z2)"),
     },
+    outputSchema: uploadResultSchema,
     run: async (args, ctx) => {
       const workoutJson = buildZ2WalkJson(args.name, args.duration_min, args.hr_min, args.hr_max);
       return curateUploadResult(await postWorkout(ctx, workoutJson));
@@ -1588,6 +1770,7 @@ it matches one of its own exercise keys (e.g. "FARMERS_CARRY").`,
           'List of dicts with keys: name, sets, reps, rest_seconds and an optional category. Category is omitted from the payload when not given; Garmin accepts that. When given it must be one of Garmin\'s exercise categories (e.g. SQUAT, DEADLIFT, PUSH_UP, CARRY, SLED) — anything else, including "UNASSIGNED" and "OTHER", is rejected with 400 Invalid category. Full list: https://connect.garmin.com/web-data/exercises/Exercises.json'
         ),
     },
+    outputSchema: uploadResultSchema,
     run: async (args, ctx) => {
       const workoutJson = buildStrengthJson(args.name, args.exercises as Dict[]);
       return curateUploadResult(await postWorkout(ctx, workoutJson));
@@ -1605,6 +1788,21 @@ duplicating calendar entries).`,
         .array(z.record(z.any()))
         .describe("List of dicts with keys: date (YYYY-MM-DD), workout_id (number)"),
     },
+    // date/workout_id echo raw caller input on the failure path
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      scheduled: z
+        .array(
+          z.object({
+            date: z.unknown().optional(),
+            workout_id: z.unknown().optional(),
+            status: z.string().optional(),
+            idempotent: z.boolean().optional(),
+            message: z.string().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const week = args.week as Dict[];
       const results: Dict[] = [];

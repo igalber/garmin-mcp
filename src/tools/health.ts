@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Ctx, ToolDef } from "../toolkit";
-import { addDays, assertSpan, dateStr, isoDate, parseDate, stripNulls } from "../toolkit";
+import { addDays, assertSpan, dateStr, isoDate, parseDate, stripNulls, withMessage } from "../toolkit";
 
 const weeksParam = z
   .number()
@@ -58,6 +58,41 @@ export const tools: ToolDef[] = [
     name: "get_stats",
     desc: "Get daily activity stats with curated essential metrics. Returns a summary of daily health and activity data including steps, calories, heart rate, stress, body battery, and sleep metrics.",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      total_steps: z.number().optional(),
+      daily_step_goal: z.number().optional(),
+      distance_meters: z.number().optional(),
+      floors_ascended: z.number().optional(),
+      floors_descended: z.number().optional(),
+      total_calories: z.number().optional(),
+      active_calories: z.number().optional(),
+      bmr_calories: z.number().optional(),
+      highly_active_seconds: z.number().optional(),
+      active_seconds: z.number().optional(),
+      sedentary_seconds: z.number().optional(),
+      sleeping_seconds: z.number().optional(),
+      moderate_intensity_minutes: z.number().optional(),
+      vigorous_intensity_minutes: z.number().optional(),
+      intensity_minutes_goal: z.number().optional(),
+      min_heart_rate_bpm: z.number().optional(),
+      max_heart_rate_bpm: z.number().optional(),
+      resting_heart_rate_bpm: z.number().optional(),
+      last_7_days_avg_resting_hr: z.number().optional(),
+      avg_stress_level: z.number().optional(),
+      max_stress_level: z.number().optional(),
+      stress_qualifier: z.string().optional(),
+      body_battery_charged: z.number().optional(),
+      body_battery_drained: z.number().optional(),
+      body_battery_highest: z.number().optional(),
+      body_battery_lowest: z.number().optional(),
+      body_battery_current: z.number().optional(),
+      avg_spo2_percent: z.number().optional(),
+      lowest_spo2_percent: z.number().optional(),
+      avg_waking_respiration: z.number().optional(),
+      highest_respiration: z.number().optional(),
+      lowest_respiration: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const stats = await userSummary(ctx, args.date);
       if (isEmpty(stats)) return `No stats found for ${args.date}`;
@@ -180,6 +215,36 @@ export const tools: ToolDef[] = [
     name: "get_training_readiness",
     desc: "Get training readiness data with curated metrics. Returns training readiness score and contributing factors.",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      items: z
+        .array(
+          z.object({
+            date: z.string().optional(),
+            timestamp: z.string().optional(),
+            context: z.string().optional(),
+            level: z.string().optional(),
+            score: z.number().optional(),
+            feedback: z.string().optional(),
+            sleep_score: z.number().optional(),
+            sleep_factor_percent: z.number().optional(),
+            sleep_factor_feedback: z.string().optional(),
+            recovery_time_hours: z.number().optional(),
+            recovery_factor_percent: z.number().optional(),
+            recovery_factor_feedback: z.string().optional(),
+            training_load_factor_percent: z.number().optional(),
+            training_load_feedback: z.string().optional(),
+            acute_load: z.number().optional(),
+            hrv_factor_percent: z.number().optional(),
+            hrv_factor_feedback: z.string().optional(),
+            hrv_weekly_avg: z.number().optional(),
+            stress_history_factor_percent: z.number().optional(),
+            stress_history_feedback: z.string().optional(),
+            sleep_history_factor_percent: z.number().optional(),
+            sleep_history_feedback: z.string().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const list = await trainingReadiness(ctx, args.date);
       if (isEmpty(list)) return `No training readiness data found for ${args.date}`;
@@ -218,6 +283,31 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    // not stripNulls'd, so raw Garmin fields may arrive as null
+    outputSchema: withMessage({
+      items: z
+        .array(
+          z.object({
+            date: z.string().nullish(),
+            charged: z.number().nullish(),
+            drained: z.number().nullish(),
+            events: z
+              .array(
+                z.object({
+                  type: z.string().nullish(),
+                  start_time: z.string().nullish(),
+                  duration_minutes: z.number().optional(),
+                  body_battery_impact: z.number().nullish(),
+                  feedback: z.string().nullish(),
+                })
+              )
+              .optional(),
+            current_feedback: z.string().nullish(),
+            body_battery_level: z.string().nullish(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const days = (await ctx.api("/wellness-service/wellness/bodyBattery/reports/daily", {
         params: { startDate: args.start_date, endDate: args.end_date },
@@ -309,6 +399,15 @@ export const tools: ToolDef[] = [
     name: "get_heart_rates_summary",
     desc: "Get heart rate summary with essential metrics (lightweight version). Returns a compact summary (~500 bytes) instead of full time-series data (~25KB). Ideal for daily health checkups and LLM integrations.",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      max_heart_rate_bpm: z.number().optional(),
+      min_heart_rate_bpm: z.number().optional(),
+      resting_heart_rate_bpm: z.number().optional(),
+      last_7_days_avg_resting_hr: z.number().optional(),
+      avg_heart_rate_bpm: z.number().optional(),
+      data_points_count: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const hr = await heartRates(ctx, args.date);
       if (isEmpty(hr)) return `No heart rate data found for ${args.date}`;
@@ -355,6 +454,29 @@ export const tools: ToolDef[] = [
     name: "get_sleep_summary",
     desc: "Get sleep summary with only essential metrics (lightweight version). This endpoint returns a compact summary of sleep data (~350 bytes) instead of the full granular data (~50KB). Ideal for daily health checkups and LLM integrations where the full time-series data would overwhelm the context window.",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      sleep_seconds: z.number().optional(),
+      nap_seconds: z.number().optional(),
+      sleep_start: z.number().optional(),
+      sleep_end: z.number().optional(),
+      sleep_score: z.number().optional(),
+      sleep_score_qualifier: z.string().optional(),
+      deep_sleep_seconds: z.number().optional(),
+      light_sleep_seconds: z.number().optional(),
+      rem_sleep_seconds: z.number().optional(),
+      awake_seconds: z.number().optional(),
+      awake_count: z.number().optional(),
+      restless_moments_count: z.number().optional(),
+      avg_sleep_stress: z.number().optional(),
+      resting_heart_rate_bpm: z.number().optional(),
+      avg_spo2_percent: z.number().optional(),
+      lowest_spo2_percent: z.number().optional(),
+      avg_overnight_hrv: z.number().optional(),
+      deep_sleep_percent: z.number().optional(),
+      light_sleep_percent: z.number().optional(),
+      rem_sleep_percent: z.number().optional(),
+      sleep_hours: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const sleep = await sleepData(ctx, args.date);
       if (isEmpty(sleep)) return `No sleep summary found for ${args.date}`;
@@ -400,6 +522,31 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      nights: z.number().optional(),
+      days: z
+        .array(
+          z.object({
+            date: z.string(),
+            sleep_score: z.number().optional(),
+            quality: z.string().optional(),
+            total_sleep_seconds: z.number().optional(),
+            deep_seconds: z.number().optional(),
+            light_seconds: z.number().optional(),
+            rem_seconds: z.number().optional(),
+            awake_seconds: z.number().optional(),
+            resting_heart_rate: z.number().optional(),
+            avg_overnight_hrv: z.number().optional(),
+            hrv_status: z.string().optional(),
+            respiration: z.number().optional(),
+            body_battery_change: z.number().optional(),
+            sleep_need_minutes: z.number().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       // Garmin caps this endpoint at 28 days/request; 1120 days = 40 chunks (the worker call budget)
       assertSpan(args.start_date, args.end_date, 1120);
@@ -457,6 +604,16 @@ export const tools: ToolDef[] = [
     name: "get_stress_summary",
     desc: "Get stress summary with essential metrics (lightweight version). Returns a compact summary (~400 bytes) instead of full time-series data (~35KB). Ideal for daily health checkups and LLM integrations.",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      max_stress_level: z.number().optional(),
+      avg_stress_level: z.number().optional(),
+      rest_percent: z.number().optional(),
+      low_stress_percent: z.number().optional(),
+      medium_stress_percent: z.number().optional(),
+      high_stress_percent: z.number().optional(),
+      data_points_count: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const stress = await stressData(ctx, args.date);
       if (isEmpty(stress)) return `No stress data found for ${args.date}`;
@@ -493,6 +650,13 @@ export const tools: ToolDef[] = [
     name: "get_respiration_summary",
     desc: "Get respiration summary with essential metrics (lightweight version). Returns a compact summary (~300 bytes) instead of full time-series data (~20KB).",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      lowest_breaths_per_min: z.number().optional(),
+      highest_breaths_per_min: z.number().optional(),
+      avg_waking_breaths_per_min: z.number().optional(),
+      avg_sleep_breaths_per_min: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const resp = await respirationData(ctx, args.date);
       if (isEmpty(resp)) return `No respiration data found for ${args.date}`;
@@ -509,6 +673,18 @@ export const tools: ToolDef[] = [
     name: "get_spo2_data",
     desc: "Get SpO2 (blood oxygen) data",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      avg_spo2_percent: z.number().optional(),
+      lowest_spo2_percent: z.number().optional(),
+      latest_spo2_percent: z.number().optional(),
+      latest_reading_time: z.unknown(),
+      // stays a string when parseFloat fails
+      last_7_days_avg_spo2: z.unknown(),
+      avg_sleep_spo2_percent: z.number().optional(),
+      // raw Garmin [timestamp, value] pairs
+      hourly_averages: z.unknown(),
+    }),
     run: async (args, ctx) => {
       const spo2 = (await ctx.api(`/wellness-service/wellness/daily/spo2/${args.date}`)) as Record<
         string,
@@ -570,6 +746,23 @@ export const tools: ToolDef[] = [
     name: "get_weekly_steps",
     desc: "Get weekly step data aggregates. Returns weekly step totals for the specified number of weeks ending at end_date.",
     params: { end_date: dateStr.describe("End date in YYYY-MM-DD format"), weeks: weeksParam },
+    outputSchema: withMessage({
+      end_date: z.string().optional(),
+      weeks_requested: z.number().optional(),
+      weeks_returned: z.number().optional(),
+      weekly_data: z
+        .array(
+          z.object({
+            week_start: z.string().optional(),
+            total_steps: z.number().optional(),
+            average_steps: z.number().optional(),
+            total_distance_meters: z.number().optional(),
+            average_distance_meters: z.number().optional(),
+            days_with_data: z.number().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const weeks = Math.min(args.weeks, 52);
       const data = (await ctx.api(
@@ -600,6 +793,14 @@ export const tools: ToolDef[] = [
     name: "get_weekly_stress",
     desc: "Get weekly stress data aggregates. Returns weekly stress values for the specified number of weeks ending at end_date.",
     params: { end_date: dateStr.describe("End date in YYYY-MM-DD format"), weeks: weeksParam },
+    outputSchema: withMessage({
+      end_date: z.string().optional(),
+      weeks_requested: z.number().optional(),
+      weeks_returned: z.number().optional(),
+      weekly_data: z
+        .array(z.object({ week_start: z.string().optional(), stress_value: z.number().optional() }))
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const weeks = Math.min(args.weeks, 52);
       const data = (await ctx.api(
@@ -626,6 +827,22 @@ export const tools: ToolDef[] = [
     name: "get_weekly_intensity_minutes",
     desc: "Get weekly intensity minutes data aggregates. Returns weekly intensity minutes (moderate and vigorous) for the specified number of weeks ending at end_date.",
     params: { end_date: dateStr.describe("End date in YYYY-MM-DD format"), weeks: weeksParam },
+    outputSchema: withMessage({
+      end_date: z.string().optional(),
+      weeks_requested: z.number().optional(),
+      weeks_returned: z.number().optional(),
+      weekly_data: z
+        .array(
+          z.object({
+            week_start: z.string().optional(),
+            weekly_goal: z.number().optional(),
+            moderate_minutes: z.number().optional(),
+            vigorous_minutes: z.number().optional(),
+            total_minutes: z.number().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const weeks = Math.min(args.weeks, 52);
       const startDate = isoDate(addDays(parseDate(args.end_date), -(weeks * 7 - 1)));
@@ -657,6 +874,24 @@ export const tools: ToolDef[] = [
     name: "get_morning_training_readiness",
     desc: "Get morning training readiness score. Returns the morning training readiness assessment, which evaluates recovery status and readiness to train based on overnight metrics.",
     params: { date: dateStr },
+    // only date/recovery_time_hours/sleep_score/acute_load are present in today's payload; rest unverified
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      readiness_score: z.unknown(),
+      readiness_level: z.unknown(),
+      recovery_time_hours: z.number().optional(),
+      hrv_status: z.unknown(),
+      sleep_quality: z.unknown(),
+      sleep_score: z.number().optional(),
+      resting_heart_rate_bpm: z.unknown(),
+      hrv_baseline: z.unknown(),
+      hrv_last_night: z.unknown(),
+      body_battery_percent: z.unknown(),
+      stress_level: z.unknown(),
+      training_load_balance: z.unknown(),
+      acute_load: z.number().optional(),
+      chronic_load: z.unknown(),
+    }),
     run: async (args, ctx) => {
       const list = await trainingReadiness(ctx, args.date);
       if (isEmpty(list)) return `No morning training readiness data found for ${args.date}`;

@@ -9,6 +9,11 @@ Modules: activity management (24), health & wellness (30), training & performanc
 workouts + builders (19), nutrition (14), challenges/devices/gear (18), weight/body/women's
 health/courses (14), FIT-file analysis (4), user profile (4), passthrough (1).
 
+98 tools declare an MCP `outputSchema` and return validated `structuredContent` alongside the
+text result — the ones whose output this server constructs (summaries, ranges, curated lists).
+Raw Garmin passthroughs deliberately don't: the SDK fails a call whose structured output doesn't
+match its schema, and Garmin's raw shapes drift.
+
 Auth: the server is an OAuth 2.1 authorization server (via `@cloudflare/workers-oauth-provider`).
 Adding it to an MCP client opens a browser page where you enter your Garmin email and password
 (and an MFA code if your account uses 2FA). The Worker runs Garmin's SSO web-widget login flow

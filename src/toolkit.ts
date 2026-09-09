@@ -10,9 +10,19 @@ export interface ToolDef {
   name: string;
   desc: string;
   params?: z.ZodRawShape;
+  // Only for tools whose output WE construct (curated). The MCP SDK validates structuredContent
+  // against it and fails the call on mismatch, so never declare one for raw Garmin passthroughs.
+  outputSchema?: z.ZodRawShape;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   run: (args: any, ctx: Ctx) => Promise<unknown>;
 }
+
+// The registration wrapper folds a string result into { message } and a bare array into { items },
+// so every outputSchema must admit those and keep all data fields optional.
+export const withMessage = (shape: z.ZodRawShape): z.ZodRawShape => ({
+  ...shape,
+  message: z.string().optional(),
+});
 
 export const dateStr = z
   .string()

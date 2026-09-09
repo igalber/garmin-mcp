@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Ctx, ToolDef } from "../toolkit";
-import { dateStr, stripNulls, assertSpan, eachDate } from "../toolkit";
+import { dateStr, stripNulls, assertSpan, eachDate, withMessage } from "../toolkit";
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -54,6 +54,22 @@ function mapContributor(c: Record<string, any>, mapping: Record<number, string>)
   }
   return out;
 }
+
+const contributorSchema = z.object({
+  contribution_percent: z.number().optional(),
+  activity_type: z.string().optional(),
+  activity_type_id: z.unknown().optional(),
+  group: z.string().optional(),
+});
+
+const loadBandSchema = z
+  .object({
+    load: z.number().optional(),
+    target_min: z.unknown().optional(),
+    target_max: z.unknown().optional(),
+    status: z.string().optional(),
+  })
+  .optional();
 
 // Find all VO2 max values by sport in known Garmin response shapes
 function extractVo2Measurements(data: unknown): Record<string, number> {
@@ -126,6 +142,24 @@ export const tools: ToolDef[] = [
         .string()
         .describe('Metric to get progress for (e.g., "elevationGain", "duration", "distance", "movingDuration")'),
     },
+    outputSchema: withMessage({
+      metric: z.string().optional(),
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      date: z.unknown().optional(),
+      count_of_activities: z.unknown().optional(),
+      stats_by_activity_type: z
+        .record(
+          z.object({
+            count: z.unknown().optional(),
+            sum: z.unknown().optional(),
+            avg: z.unknown().optional(),
+            min: z.unknown().optional(),
+            max: z.unknown().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date, metric } = args;
       const raw = (await ctx.api("/fitnessstats-service/activity", {
@@ -166,6 +200,27 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      period_avg_score: z.unknown().optional(),
+      max_score: z.unknown().optional(),
+      latest_date: z.unknown().optional(),
+      latest_overall_score: z.unknown().optional(),
+      latest_strength_score: z.unknown().optional(),
+      latest_endurance_score: z.unknown().optional(),
+      latest_classification_id: z.unknown().optional(),
+      daily_scores: z
+        .array(
+          z.object({
+            date: z.unknown().optional(),
+            overall: z.unknown().optional(),
+            strength: z.unknown().optional(),
+            endurance: z.unknown().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date } = args;
       const data = asDict(
@@ -205,6 +260,37 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      period_avg_score: z.unknown().optional(),
+      period_max_score: z.unknown().optional(),
+      current_score: z.unknown().optional(),
+      current_date: z.unknown().optional(),
+      classification: z.string().optional(),
+      classification_id: z.unknown().optional(),
+      thresholds: z
+        .object({
+          intermediate: z.unknown().optional(),
+          trained: z.unknown().optional(),
+          well_trained: z.unknown().optional(),
+          expert: z.unknown().optional(),
+          superior: z.unknown().optional(),
+          elite: z.unknown().optional(),
+        })
+        .optional(),
+      contributors: z.array(contributorSchema).optional(),
+      weekly_breakdown: z
+        .array(
+          z.object({
+            week_start: z.string().optional(),
+            avg_score: z.unknown().optional(),
+            max_score: z.unknown().optional(),
+            contributors: z.array(contributorSchema).optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date } = args;
       const data = asDict(
@@ -281,6 +367,16 @@ export const tools: ToolDef[] = [
     params: {
       activity_id: z.number().describe("ID of the activity to retrieve training effect for"),
     },
+    outputSchema: withMessage({
+      activity_id: z.number().optional(),
+      training_effect: z.unknown().optional(),
+      aerobic_effect: z.unknown().optional(),
+      anaerobic_effect: z.unknown().optional(),
+      training_effect_label: z.unknown().optional(),
+      recovery_time_hours: z.number().optional(),
+      training_load: z.unknown().optional(),
+      performance_condition: z.unknown().optional(),
+    }),
     run: async (args, ctx) => {
       const activity = asDict(await ctx.api(`/activity-service/activity/${args.activity_id}`));
       if (Object.keys(activity).length === 0) {
@@ -309,6 +405,23 @@ export const tools: ToolDef[] = [
         .optional()
         .describe("If true, include detailed 5-minute HRV readings (can be large)"),
     },
+    outputSchema: withMessage({
+      date: z.unknown().optional(),
+      last_night_avg_hrv_ms: z.unknown().optional(),
+      last_night_5min_high_hrv_ms: z.unknown().optional(),
+      weekly_avg_hrv_ms: z.unknown().optional(),
+      baseline_balanced_low_ms: z.unknown().optional(),
+      baseline_balanced_upper_ms: z.unknown().optional(),
+      baseline_low_upper_ms: z.unknown().optional(),
+      status: z.unknown().optional(),
+      feedback: z.unknown().optional(),
+      sleep_start: z.unknown().optional(),
+      sleep_end: z.unknown().optional(),
+      hrv_readings: z
+        .array(z.object({ time: z.unknown().optional(), hrv_ms: z.unknown().optional() }))
+        .optional(),
+      readings_count: z.number().optional(),
+    }),
     run: async (args, ctx) => {
       const hrvData = asDict(await ctx.api(`/hrv-service/hrv/${args.date}`));
       if (Object.keys(hrvData).length === 0) return { message: `No HRV data found for ${args.date}.` };
@@ -345,6 +458,28 @@ export const tools: ToolDef[] = [
         .optional()
         .describe("If true, include component breakdown (BMI, RHR, vigorous activity) with targets and improvement suggestions"),
     },
+    outputSchema: withMessage({
+      date: z.string().optional(),
+      fitness_age_years: z.number().optional(),
+      chronological_age_years: z.unknown().optional(),
+      age_difference_years: z.number().optional(),
+      achievable_fitness_age_years: z.number().optional(),
+      previous_fitness_age_years: z.number().optional(),
+      last_updated: z.unknown().optional(),
+      components: z
+        .record(
+          z.object({
+            value: z.unknown().optional(),
+            target: z.unknown().optional(),
+            improvement_needed: z.unknown().optional(),
+            potential_age_if_improved: z.number().optional(),
+            priority: z.unknown().optional(),
+            stale: z.unknown().optional(),
+            last_measurement: z.unknown().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const fitnessAge = asDict(await ctx.api(`/fitnessage-service/fitnessage/${args.date}`));
       if (Object.keys(fitnessAge).length === 0) return { message: `No fitness age data found for ${args.date}.` };
@@ -382,6 +517,28 @@ export const tools: ToolDef[] = [
     name: "get_training_status",
     desc: "Get training status with curated metrics: load, VO2 max, recovery, and training readiness indicators",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.unknown().optional(),
+      training_status: z.unknown().optional(),
+      training_status_feedback: z.unknown().optional(),
+      sport: z.unknown().optional(),
+      fitness_trend: z.unknown().optional(),
+      acute_load: z.unknown().optional(),
+      chronic_load: z.unknown().optional(),
+      load_ratio: z.unknown().optional(),
+      acwr_status: z.unknown().optional(),
+      acwr_percent: z.unknown().optional(),
+      optimal_chronic_load_min: z.unknown().optional(),
+      optimal_chronic_load_max: z.unknown().optional(),
+      vo2_max: z.unknown().optional(),
+      vo2_max_precise: z.unknown().optional(),
+      cycling_vo2_max: z.unknown().optional(),
+      cycling_vo2_max_precise: z.unknown().optional(),
+      monthly_load_aerobic_low: z.unknown().optional(),
+      monthly_load_aerobic_high: z.unknown().optional(),
+      monthly_load_anaerobic: z.unknown().optional(),
+      training_balance_feedback: z.unknown().optional(),
+    }),
     run: async (args, ctx) => {
       const status = asDict(await trainingStatus(ctx, args.date));
       if (Object.keys(status).length === 0) {
@@ -421,6 +578,13 @@ export const tools: ToolDef[] = [
   {
     name: "get_cycling_ftp",
     desc: "Get the latest cycling Functional Threshold Power (FTP) estimate available from Garmin",
+    outputSchema: withMessage({
+      sport: z.unknown().optional(),
+      functional_threshold_power_watts: z.unknown().optional(),
+      calendar_date: z.unknown().optional(),
+      is_stale: z.unknown().optional(),
+      biometric_source_type: z.unknown().optional(),
+    }),
     run: async (_args, ctx) => {
       const raw = await ctx.api("/biometric-service/biometric/latestFunctionalThresholdPower/CYCLING");
       const ftp = Array.isArray(raw) ? asDict(raw[0]) : asDict(raw);
@@ -441,6 +605,31 @@ export const tools: ToolDef[] = [
       start_date: dateStr.optional().describe("Start date in YYYY-MM-DD format (optional, omit for latest)"),
       end_date: dateStr.optional().describe("End date in YYYY-MM-DD format (optional, omit for latest)"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      speed_history: z
+        .array(z.object({ date: z.unknown().optional(), speed_mps: z.unknown().optional(), series: z.unknown().optional() }))
+        .optional(),
+      heart_rate_history: z
+        .array(
+          z.object({ date: z.unknown().optional(), heart_rate_bpm: z.unknown().optional(), series: z.unknown().optional() })
+        )
+        .optional(),
+      power_history: z
+        .array(z.object({ date: z.unknown().optional(), power_watts: z.unknown().optional(), series: z.unknown().optional() }))
+        .optional(),
+      lactate_threshold_speed_mps: z.unknown().optional(),
+      lactate_threshold_heart_rate_bpm: z.unknown().optional(),
+      heart_rate_cycling_bpm: z.unknown().optional(),
+      speed_hr_date: z.unknown().optional(),
+      functional_threshold_power_watts: z.unknown().optional(),
+      weight_kg: z.unknown().optional(),
+      power_to_weight: z.unknown().optional(),
+      sport: z.unknown().optional(),
+      power_date: z.unknown().optional(),
+      is_stale: z.unknown().optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date } = args;
       if (start_date && end_date) {
@@ -515,6 +704,30 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      days_with_data: z.number().optional(),
+      trend: z
+        .array(
+          z.object({
+            date: z.string().optional(),
+            atl: z.number().optional(),
+            ctl: z.number().optional(),
+            tsb: z.number().optional(),
+            acwr: z.number().optional(),
+            acwr_status: z.unknown().optional(),
+            acwr_percent: z.unknown().optional(),
+            optimal_chronic_load_min: z.number().optional(),
+            optimal_chronic_load_max: z.number().optional(),
+            training_status: z.unknown().optional(),
+            training_status_code: z.unknown().optional(),
+            fitness_trend: z.unknown().optional(),
+            vo2_max: z.number().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date } = args;
       assertSpan(start_date, end_date, 45);
@@ -556,6 +769,13 @@ export const tools: ToolDef[] = [
     name: "get_training_load_balance",
     desc: "Get Garmin's Load Focus: the trailing-month training load split across Aerobic Low, Aerobic High, and Anaerobic bands with target ranges, a below/within/above status per band, and the system's feedback phrase (e.g. AEROBIC_HIGH_SHORTAGE, BALANCED, ANAEROBIC_SHORTAGE)",
     params: { date: dateStr },
+    outputSchema: withMessage({
+      date: z.unknown().optional(),
+      feedback: z.unknown().optional(),
+      aerobic_low: loadBandSchema,
+      aerobic_high: loadBandSchema,
+      anaerobic: loadBandSchema,
+    }),
     run: async (args, ctx) => {
       const data = asDict(await trainingStatus(ctx, args.date));
       const loadMap = asDict(asDict(data.mostRecentTrainingLoadBalance).metricsTrainingLoadBalanceDTOMap);
@@ -595,6 +815,24 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      days_with_data: z.number().optional(),
+      period_avg_hrv_ms: z.number().nullable().optional(),
+      trend: z
+        .array(
+          z.object({
+            date: z.unknown().optional(),
+            last_night_avg_hrv_ms: z.number().optional(),
+            weekly_avg_hrv_ms: z.number().optional(),
+            last_night_5min_high_hrv_ms: z.number().optional(),
+            status: z.unknown().optional(),
+            feedback: z.unknown().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date } = args;
       assertSpan(start_date, end_date, 30);
@@ -629,6 +867,26 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      data_points: z.number().optional(),
+      first_vo2_max: z.number().nullable().optional(),
+      latest_vo2_max: z.number().nullable().optional(),
+      change: z.number().nullable().optional(),
+      trend: z
+        .array(z.object({ date: z.string().optional(), vo2_max: z.number().optional(), source: z.string().optional() }))
+        .optional(),
+      sport: z.string().optional(),
+      current_vo2_max_estimate: z
+        .object({
+          vo2_max: z.number().optional(),
+          sport: z.string().nullable().optional(),
+          source: z.string().optional(),
+        })
+        .optional(),
+      note: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date } = args;
       assertSpan(start_date, end_date, 90);
@@ -730,6 +988,23 @@ export const tools: ToolDef[] = [
       start_date: dateStr.describe("Start date in YYYY-MM-DD format"),
       end_date: dateStr.describe("End date in YYYY-MM-DD format"),
     },
+    outputSchema: withMessage({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      days_with_data: z.number().optional(),
+      period_avg_sleep_breaths_per_min: z.number().nullable().optional(),
+      trend: z
+        .array(
+          z.object({
+            date: z.string().optional(),
+            avg_waking_breaths_per_min: z.number().optional(),
+            avg_sleep_breaths_per_min: z.number().optional(),
+            highest_breaths_per_min: z.number().optional(),
+            lowest_breaths_per_min: z.number().optional(),
+          })
+        )
+        .optional(),
+    }),
     run: async (args, ctx) => {
       const { start_date, end_date } = args;
       assertSpan(start_date, end_date, 30);

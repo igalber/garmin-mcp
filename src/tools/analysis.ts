@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Buffer } from "node:buffer";
 import { Decoder, Stream } from "@garmin/fitsdk";
 import type { Ctx, ToolDef } from "../toolkit";
-import { idParam, isoDate } from "../toolkit";
+import { idParam, isoDate, withMessage } from "../toolkit";
 
 const PDC_DURATIONS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 480, 600, 1200, 1800, 2700, 3600];
 
@@ -146,6 +146,27 @@ export const tools: ToolDef[] = [
       activity_id: idParam,
       include_records: z.boolean().default(false).describe("Include up to 500 downsampled records"),
     },
+    // session/laps/records are raw FIT SDK messages, so they stay untyped; nulls are not stripped here
+    outputSchema: withMessage({
+      activity_id: z.union([z.string(), z.number()]).optional(),
+      date: z.string().nullable().optional(),
+      session: z.unknown(),
+      laps: z.unknown(),
+      record_count: z.number().optional(),
+      power_analysis: z
+        .object({
+          avg_power: z.number().optional(),
+          normalized_power: z.number().nullable().optional(),
+          variability_index: z.number().nullable().optional(),
+          work_kj: z.number().optional(),
+          power_duration_curve: z.record(z.number()).optional(),
+          rider_weight_kg: z.number().optional(),
+          avg_wkg: z.number().optional(),
+        })
+        .nullable()
+        .optional(),
+      records: z.array(z.record(z.unknown())).optional(),
+    }),
     run: async (args, ctx) => {
       const fit = await downloadOriginalFit(ctx, Number(args.activity_id));
       const messages = decodeFit(fit);
@@ -203,6 +224,21 @@ export const tools: ToolDef[] = [
       num_activities: z.number().int().min(1).max(15).default(10),
       activity_type: z.string().default("cycling").describe("Only cycling-type activities are analyzed"),
     },
+    outputSchema: withMessage({
+      activities_considered: z.number().optional(),
+      activities_processed: z.number().optional(),
+      activities_skipped: z.number().optional(),
+      power_duration_curve: z
+        .record(
+          z.object({
+            watts: z.number().optional(),
+            activity_id: z.number().optional(),
+            date: z.string().optional(),
+          })
+        )
+        .optional(),
+      ftp_estimate_watts: z.number().nullable().optional(),
+    }),
     run: async (args, ctx) => {
       const acts = (await ctx.api("/activitylist-service/activities/search/activities", {
         params: { start: "0", limit: String(args.num_activities) },
@@ -249,6 +285,14 @@ export const tools: ToolDef[] = [
       activity_id: idParam,
       format: z.enum(["fit", "gpx", "tcx", "csv"]).default("fit"),
     },
+    outputSchema: withMessage({
+      status: z.string().optional(),
+      activity_id: z.number().optional(),
+      format: z.string().optional(),
+      size_bytes: z.number().optional(),
+      content_base64: z.string().optional(),
+      content: z.string().optional(),
+    }),
     run: async (args, ctx) => {
       const id = Number(args.activity_id);
       if (args.format === "fit") {
@@ -282,6 +326,7 @@ export const tools: ToolDef[] = [
     name: "set_fit_download_dir",
     desc: "Set the default download directory (no-op on this remote deployment; kept for compatibility with the original local server)",
     params: { path: z.string() },
+    outputSchema: withMessage({ status: z.string().optional() }),
     run: async (args) => ({
       status: "not_supported",
       message: `This server runs remotely on Cloudflare Workers and cannot write to local disk. Use download_activity_file, which returns file content inline. (requested path: ${args.path})`,
