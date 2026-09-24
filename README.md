@@ -57,6 +57,23 @@ their own valid Garmin credentials. Leave it empty to allow any Garmin account.
 - Free-tier subrequest budget (~50/invocation): `get_training_load_trend` capped at 45 days (was 90), `get_power_duration_curve` at 15 activities (was 20), `get_hrv_trend` uses the range endpoint in one call, goal/step/menstrual pagination loops capped.
 - Tools return JSON objects rather than pre-serialized strings; errors surface as MCP tool errors.
 
+## Development
+
+- `npm run typecheck` — `wrangler types` + `tsc` for the Worker and the tests.
+- `npm test` — Vitest in the Workers runtime (`@cloudflare/vitest-pool-workers`). The suite runs
+  the real Worker end to end: OAuth client registration → authorize (token paste) → token → `/mcp`
+  over Streamable HTTP, with Garmin Connect replaced by `test/garmin-mock.worker.js` via
+  Miniflare's outbound service. It asserts the HTTP response ends right after the final JSON-RPC
+  event (the old `agents@0.0.100` adapter left every response open ~10 s), that
+  `notifications/initialized` returns `202`, that a session survives Durable Object eviction, and
+  that tool/resource lists and the `get_activities` schemas are unchanged.
+- `npm run build` — `wrangler deploy --dry-run` bundle check (nothing is deployed).
+- Timing logs: `MCP_TIMING` (`vars` in `wrangler.jsonc`, default `"1"`) emits one JSON line per
+  stage — Worker request entry, response headers, first byte, stream end; Durable Object start,
+  tool registration, token exchange, each Garmin fetch, each tool run — tagged with the MCP
+  session id, a per-request id (`rid`) and the JSON-RPC id. Filter Workers Logs on
+  `"t":"mcp-timing"`. Set it to `"0"` to silence. Lines never contain tokens or Garmin data.
+
 ## Notes
 
 - The Garmin token is stored encrypted inside the grant in Workers KV; when it expires (~1 year), tool calls start failing — reauthenticate the server in your client to run the flow again.

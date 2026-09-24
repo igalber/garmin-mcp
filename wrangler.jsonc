@@ -15,6 +15,10 @@
   ],
   // OWNER_GARMIN_IDS is a secret, not a committed var:
   //   npx wrangler secret put OWNER_GARMIN_IDS   (your get_user_profile displayName)
+  // MCP_TIMING: "1" emits one JSON line per stage (request entry, DO start, tool run, Garmin
+  // fetch, first byte, stream end) tagged with the session id and a per-request id. Set to "0"
+  // to silence. Never includes tokens or Garmin data.
+  "vars": { "MCP_TIMING": "1" },
   "observability": {
     "enabled": false,
     "head_sampling_rate": 1,

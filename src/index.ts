@@ -4,6 +4,7 @@ import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { api, exchange, type OAuth1Token, type OAuth2Token } from "./garmin";
 import { authHandler } from "./auth";
 import type { Ctx, ToolDef } from "./toolkit";
+import { makeTimer, timingEnabled, withRequestTiming, type Timer } from "./timing";
 import { tools as profileTools } from "./tools/profile";
 import { tools as activityTools } from "./tools/activities";
 import { tools as healthTools } from "./tools/health";
@@ -46,38 +47,84 @@ const toResult = (data: unknown, structured: boolean) => {
 
 export class GarminMCP extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "garmin", version: "0.2.0" });
+  // agents' default observability console.logs a "Connection established/closed" object for every
+  // POST (each one is a short-lived internal WebSocket). The MCP_TIMING lines cover that lifecycle
+  // with correlation ids, so drop the generic ones.
+  observability = undefined;
   private oauth2?: OAuth2Token;
   private dn?: string;
   private principal?: string;
 
+  // Correlation for Durable Object-side timing lines: the MCP session id (this object's name is
+  // `streamable-http:<session>`) plus a per-instance id that changes on every cold start.
+  private timer(): Timer {
+    let session: string | undefined;
+    try {
+      session = this.name.split(":")[1]; // partyserver throws if the name is not yet set
+    } catch {
+      session = undefined;
+    }
+    return makeTimer(timingEnabled(this.env), "do", {
+      session,
+      instance: (this.instanceId ??= crypto.randomUUID().slice(0, 8)),
+    });
+  }
+  private instanceId?: string;
+
+  // The Garmin grant travels as OAuth props; a session with no grant cannot call Garmin.
+  private grant(): OAuth1Token {
+    const g = this.props?.oauth1;
+    if (!g?.oauth_token || !g.oauth_token_secret) {
+      throw new Error("No Garmin credentials on this MCP session — re-authorize the server.");
+    }
+    return g;
+  }
+
   // drop cached tokens if this request's grant differs from the one they were derived from,
   // so a reused Durable Object never serves one principal's data under another's credential
   private syncPrincipal() {
-    if (this.principal !== this.props.oauth1.oauth_token) {
-      this.principal = this.props.oauth1.oauth_token;
+    const token = this.grant().oauth_token;
+    if (this.principal !== token) {
+      this.principal = token;
       this.oauth2 = undefined;
       this.dn = undefined;
     }
   }
 
+  // Lazy: the OAuth1 -> OAuth2 exchange only happens on the first Garmin call of a live
+  // instance (or after expiry), never during initialize / tools/list.
   private async accessToken(): Promise<string> {
     this.syncPrincipal();
     if (!this.oauth2 || this.oauth2.expires_at - 300 <= Date.now() / 1000) {
-      this.oauth2 = await exchange(this.props.oauth1);
+      this.oauth2 = await this.timer().time("token-exchange", () => exchange(this.grant()));
     }
     return this.oauth2.access_token;
   }
 
+  // Runs once per live Durable Object instance (McpAgent.onStart -> init). Registration cost is
+  // paid on cold start only, not per request.
+  async onStart(props?: Props) {
+    const t = this.timer();
+    await super.onStart(props);
+    t.mark("do-start", { tools: ALL_TOOLS.length, resources: workoutResources.length });
+  }
+
   async init() {
+    const t = this.timer();
     const ctx: Ctx = {
-      api: async (path, opts) => api(await this.accessToken(), path, opts),
+      api: async (path, opts) => {
+        const token = await this.accessToken(); // logged separately as token-exchange when it happens
+        return this.timer().time("garmin-api", () => api(token, path, opts), {
+          path,
+          method: opts?.method ?? "GET",
+        });
+      },
       displayName: async () => {
         this.syncPrincipal();
         if (!this.dn) {
-          const profile = (await api(
-            await this.accessToken(),
-            "/userprofile-service/socialProfile"
-          )) as { displayName: string };
+          const profile = (await ctx.api("/userprofile-service/socialProfile")) as {
+            displayName: string;
+          };
           this.dn = encodeURIComponent(profile.displayName);
         }
         return this.dn;
@@ -85,24 +132,23 @@ export class GarminMCP extends McpAgent<Env, unknown, Props> {
     };
 
     const seen = new Set<string>();
-    for (const t of ALL_TOOLS) {
-      if (seen.has(t.name)) continue;
-      seen.add(t.name);
-      const structured = !!t.outputSchema;
+    for (const tool of ALL_TOOLS) {
+      if (seen.has(tool.name)) continue;
+      seen.add(tool.name);
+      const structured = !!tool.outputSchema;
       const config = {
-        description: t.desc,
-        ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+        description: tool.desc,
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
       };
-      if (t.params) {
-        this.server.registerTool(
-          t.name,
-          { ...config, inputSchema: t.params },
-          async (args: Record<string, unknown>) => toResult(await t.run(args, ctx), structured)
-        );
+      const run = (args: Record<string, unknown>, extra: { requestId?: unknown }) =>
+        this.timer().time("tool", async () => toResult(await tool.run(args, ctx), structured), {
+          tool: tool.name,
+          rpc_id: extra.requestId,
+        });
+      if (tool.params) {
+        this.server.registerTool(tool.name, { ...config, inputSchema: tool.params }, run);
       } else {
-        this.server.registerTool(t.name, config, async () =>
-          toResult(await t.run({}, ctx), structured)
-        );
+        this.server.registerTool(tool.name, config, (extra) => run({}, extra));
       }
     }
 
@@ -111,6 +157,7 @@ export class GarminMCP extends McpAgent<Env, unknown, Props> {
         contents: [{ uri: uri.href, mimeType: "application/json", text: r.text }],
       }));
     }
+    t.mark("init", { tools: seen.size, resources: workoutResources.length });
   }
 }
 
@@ -119,7 +166,7 @@ export class GarminMCP extends McpAgent<Env, unknown, Props> {
 export default new OAuthProvider({
   apiRoute: "/mcp",
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  apiHandler: GarminMCP.serve("/mcp") as any,
+  apiHandler: withRequestTiming(GarminMCP.serve("/mcp")) as any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   defaultHandler: authHandler as any,
   authorizeEndpoint: "/authorize",
