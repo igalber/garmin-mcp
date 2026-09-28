@@ -50,11 +50,18 @@ export class GarminMCP extends McpAgent<Env, unknown, Props> {
   private dn?: string;
   private principal?: string;
 
+  // props is optional in agents >= 0.2: a session with no grant cannot call Garmin
+  private grant(): OAuth1Token {
+    const g = this.props?.oauth1;
+    if (!g) throw new Error("No Garmin credentials on this MCP session — re-authorize the server.");
+    return g;
+  }
+
   // drop cached tokens if this request's grant differs from the one they were derived from,
   // so a reused Durable Object never serves one principal's data under another's credential
   private syncPrincipal() {
-    if (this.principal !== this.props.oauth1.oauth_token) {
-      this.principal = this.props.oauth1.oauth_token;
+    if (this.principal !== this.grant().oauth_token) {
+      this.principal = this.grant().oauth_token;
       this.oauth2 = undefined;
       this.dn = undefined;
     }
@@ -63,7 +70,7 @@ export class GarminMCP extends McpAgent<Env, unknown, Props> {
   private async accessToken(): Promise<string> {
     this.syncPrincipal();
     if (!this.oauth2 || this.oauth2.expires_at - 300 <= Date.now() / 1000) {
-      this.oauth2 = await exchange(this.props.oauth1);
+      this.oauth2 = await exchange(this.grant());
     }
     return this.oauth2.access_token;
   }
