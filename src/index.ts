@@ -13,6 +13,7 @@ import { tools as nutritionTools } from "./tools/nutrition";
 import { tools as communityTools } from "./tools/community";
 import { tools as bodyTools } from "./tools/body";
 import { tools as analysisTools } from "./tools/analysis";
+import { tools as reviewTools } from "./tools/review";
 
 // Env comes from worker-configuration.d.ts (wrangler types)
 
@@ -29,6 +30,7 @@ const ALL_TOOLS: ToolDef[] = [
   ...communityTools,
   ...bodyTools,
   ...analysisTools,
+  ...reviewTools,
 ];
 
 // Text content always carries the raw result. When a tool declares an outputSchema the SDK

@@ -59,6 +59,7 @@ their own valid Garmin credentials. Leave it empty to allow any Garmin account.
 
 ## Notes
 
+- Reviewing a day? Call `get_daily_review(date)` — one round-trip that fetches stats, sleep, readiness, stress, HRV and the day's activities (with splits, weather, gear) in parallel server-side, instead of 6-15 separate tool calls.
 - The Garmin token is stored encrypted inside the grant in Workers KV; when it expires (~1 year), tool calls start failing — reauthenticate the server in your client to run the flow again.
 - Access tokens are bearer credentials: whoever holds a valid one has your data until it expires, so the security rests on your MCP client keeping its stored token secret.
 - Local dev: `npm run dev`, then point a client at `http://localhost:8787/mcp`.
