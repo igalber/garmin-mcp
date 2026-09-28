@@ -1,16 +1,16 @@
 # garmin-mcp
 
 Remote MCP server for Garmin Connect on Cloudflare Workers (free tier). Full TypeScript port of
-[taxuspt/garmin_mcp](https://github.com/taxuspt/garmin_mcp): all 138 tools plus a `garmin_get`
-passthrough and four added tools (`upload_activity`, `create_activity_with_hr`, `delete_activity`,
-`get_sleep_range`) — 143 total — and the 5 workout template/reference MCP resources.
+[taxuspt/garmin_mcp](https://github.com/taxuspt/garmin_mcp): all of the original's tools plus
+additions and a `garmin_get` passthrough — 140+ tools — and the workout template/reference MCP
+resources.
 
-Modules: activity management (24), health & wellness (30), training & performance (15),
-workouts + builders (19), nutrition (14), challenges/devices/gear (18), weight/body/women's
-health/courses (14), FIT-file analysis (4), user profile (4), passthrough (1).
+Modules: activity management, health & wellness, training & performance, workouts + builders,
+nutrition, challenges/devices/gear, weight/body/women's health/courses, FIT-file analysis,
+user profile, passthrough.
 
-98 tools declare an MCP `outputSchema` and return validated `structuredContent` alongside the
-text result — the ones whose output this server constructs (summaries, ranges, curated lists).
+Most curated tools declare an MCP `outputSchema` and return validated `structuredContent`
+alongside the text result — the ones whose output this server constructs (summaries, ranges, curated lists).
 Raw Garmin passthroughs deliberately don't: the SDK fails a call whose structured output doesn't
 match its schema, and Garmin's raw shapes drift.
 
