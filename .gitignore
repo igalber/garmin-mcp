@@ -21,3 +21,4 @@ worker-configuration.d.ts
 # os / editor
 .DS_Store
 *.log
+.vscode
